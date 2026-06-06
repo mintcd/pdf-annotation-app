@@ -1,0 +1,26 @@
+{
+  "name": "pdf-annotation-app",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vinext dev --port 5173",
+    "build": "vinext build",
+    "deploy": "vinext deploy",
+    "start": "vinext start"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "pdfjs-dist": "^3.5.141",
+    "react-pdf": "^8.0.0"
+  },
+  "devDependencies": {
+    "vinext": "^0.0.14",
+    "vite": "^7.3.1",
+    "tailwindcss": "^4.1.17",
+    "postcss": "^8.4.38",
+    "autoprefixer": "^10.0.1",
+    "typescript": "^5.8.2"
+  }
+}
