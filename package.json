@@ -4,22 +4,47 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "vinext dev --port 5173",
+    "db:local:migrate": "wrangler d1 execute pdf_annotation --local --file ./migrations/0001_pdf_annotation_sync.sql",
+    "predev": "npm run db:local:migrate && sync-engine ./sync.config.ts",
+    "prebuild": "npm run db:local:migrate && sync-engine ./sync.config.ts",
+    "dev": "vinext dev --port 3000",
     "build": "vinext build",
+    "predeploy": "npm run db:local:migrate && sync-engine ./sync.config.ts && npm run typecheck",
     "deploy": "vinext deploy",
-    "start": "vinext start"
+    "start": "vinext start",
+    "typecheck": "tsc --noEmit --incremental false"
   },
   "dependencies": {
+    "@embedpdf/core": "^2.14.3",
+    "@embedpdf/engines": "^2.14.3",
+    "@embedpdf/models": "^2.14.3",
+    "@embedpdf/plugin-annotation": "^2.14.3",
+    "@embedpdf/plugin-document-manager": "^2.14.3",
+    "@embedpdf/plugin-export": "^2.14.3",
+    "@embedpdf/plugin-history": "^2.14.3",
+    "@embedpdf/plugin-interaction-manager": "^2.14.3",
+    "@embedpdf/plugin-render": "^2.14.3",
+    "@embedpdf/plugin-scroll": "^2.14.3",
+    "@embedpdf/plugin-selection": "^2.14.3",
+    "@embedpdf/plugin-viewport": "^2.14.3",
+    "@embedpdf/plugin-zoom": "^2.14.3",
+    "@embedpdf/snippet": "^2.14.3",
+    "@mintcd/sync-engine": "^0.1.8",
+    "katex": "^0.16.47",
+    "lucide-react": "^1.17.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.44.0",
+    "@tailwindcss/postcss": "^4.3.0",
     "@types/react": "^19.2.17",
     "autoprefixer": "^10.0.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.8.2",
     "vinext": "^0.0.14",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "wrangler": "^4.69.0"
   }
 }

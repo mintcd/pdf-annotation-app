@@ -1,0 +1,26 @@
+{
+  "name": "pdf_annotation",
+  "compatibility_date": "2026-02-27",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "main": "./worker/index.ts",
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "none",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pdf_annotation",
+      "database_id": "468b43f1-60be-4a41-9928-58b3f880b695"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}
