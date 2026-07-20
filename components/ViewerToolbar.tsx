@@ -170,9 +170,11 @@ export default function ViewerToolbar({
         </button>
       </ToolbarGroup>
 
-      <ToolbarSpacer />
+      <ToolbarSpacer className="toolbar-spacer" />
 
-      <Badge tone={saveTone} size="small" dot title={saveLabel}>{saveLabel}</Badge>
+      <Badge className="toolbar-save-status" tone={saveTone} size="small" dot title={saveLabel}>
+        {saveLabel}
+      </Badge>
       <Button
         className="toolbar-download"
         variant="secondary"

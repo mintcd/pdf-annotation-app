@@ -35,7 +35,8 @@
     "katex": "^0.16.47",
     "lucide-react": "^1.17.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-icons": "^5.7.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.44.0",

@@ -52,6 +52,41 @@ type PDFViewerProps = {
   initialAnnotationId?: string
 }
 
+type ActiveTouchGesture = {
+  hasMoved: boolean
+  isLongPress: boolean
+  longPressTimer: number | null
+  pointerId: number | 'touch'
+  startScrollLeft: number
+  startScrollTop: number
+  startX: number
+  startY: number
+  target: EventTarget | null
+  viewport: HTMLElement
+}
+
+type TouchGesturePoint = {
+  clientX: number
+  clientY: number
+  target: EventTarget | null
+}
+
+type ActivePinchGesture = {
+  hasZoomed: boolean
+  startDistance: number
+  startZoom: number
+}
+
+type ZoomScopeRef = { current: ReturnType<typeof useZoom>['provides'] }
+
+const TOUCH_PAN_THRESHOLD_PX = 7
+const TOUCH_DOUBLE_PRESS_MAX_MS = 320
+const TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX = 34
+const TOUCH_LONG_PRESS_MS = 540
+const TOUCH_MOUSE_SUPPRESSION_MS = 700
+const TOUCH_PINCH_THRESHOLD_PX = 6
+const TOUCH_MIN_PINCH_DISTANCE_PX = 28
+
 export default function PDFViewer({ source, initialAnnotationId }: PDFViewerProps) {
   const documentOptions = useMemo(() => sourceForEmbedPdf(source), [source])
   const plugins = useMemo(
@@ -149,6 +184,7 @@ function SyncedPdfWorkspace({
   const pdfViewportFrameRef = useRef<HTMLDivElement>(null)
   const syncFlushRef = useRef(sync.sync)
   const zoomRef = useRef(zoom)
+  const touchZoomBaselineRef = useRef<number | null>(null)
 
   useEffect(() => {
     syncFlushRef.current = sync.sync
@@ -161,6 +197,164 @@ function SyncedPdfWorkspace({
   useEffect(() => {
     const frame = pdfViewportFrameRef.current
     if (!frame) return
+
+    let activeTouchGesture: ActiveTouchGesture | null = null
+    let lastTapAt = 0
+    let lastTapX = 0
+    let lastTapY = 0
+    let suppressMouseUntil = 0
+    let allowSyntheticSelectionDoubleClick = false
+    let activePinchGesture: ActivePinchGesture | null = null
+    const activeTouchPoints = new Map<number, TouchGesturePoint>()
+
+    const getViewport = () => frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
+
+    const clearLongPressTimer = () => {
+      if (!activeTouchGesture?.longPressTimer) return
+      window.clearTimeout(activeTouchGesture.longPressTimer)
+      activeTouchGesture.longPressTimer = null
+    }
+
+    const resetTouchGesture = () => {
+      clearLongPressTimer()
+      activeTouchGesture = null
+    }
+
+    const resetPinchGesture = () => {
+      activePinchGesture = null
+      lastTapAt = 0
+    }
+
+    const getPinchPoints = () => {
+      const points = [...activeTouchPoints.values()]
+      return points.length >= 2 ? [points[0], points[1]] as const : null
+    }
+
+    const beginPinchGesture = (points: readonly [TouchGesturePoint, TouchGesturePoint]) => {
+      const zoomScope = zoomRef.current
+      const distance = touchPointDistance(points[0], points[1])
+      if (!zoomScope || distance < TOUCH_MIN_PINCH_DISTANCE_PX) return
+
+      resetTouchGesture()
+      lastTapAt = 0
+      activePinchGesture = {
+        hasZoomed: false,
+        startDistance: distance,
+        startZoom: zoomScope.getState().currentZoomLevel || 1,
+      }
+      suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+    }
+
+    const updatePinchGesture = (
+      points: readonly [TouchGesturePoint, TouchGesturePoint],
+      event: Event,
+    ) => {
+      if (!activePinchGesture) beginPinchGesture(points)
+      if (!activePinchGesture) return
+
+      stopTouchSelectionEvent(event)
+
+      const distance = touchPointDistance(points[0], points[1])
+      if (distance < TOUCH_MIN_PINCH_DISTANCE_PX) return
+      const distanceDelta = Math.abs(distance - activePinchGesture.startDistance)
+      if (!activePinchGesture.hasZoomed && distanceDelta < TOUCH_PINCH_THRESHOLD_PX) return
+
+      activePinchGesture.hasZoomed = true
+      suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+      requestTouchPinchZoom(points, activePinchGesture, frame, zoomRef)
+    }
+
+    const beginTouchGesture = (
+      pointerId: number | 'touch',
+      clientX: number,
+      clientY: number,
+      target: EventTarget | null,
+    ) => {
+      if (isInteractiveTouchTarget(target)) return
+
+      const viewport = getViewport()
+      resetTouchGesture()
+      activeTouchGesture = {
+        hasMoved: false,
+        isLongPress: false,
+        longPressTimer: null,
+        pointerId,
+        startScrollLeft: viewport.scrollLeft,
+        startScrollTop: viewport.scrollTop,
+        startX: clientX,
+        startY: clientY,
+        target,
+        viewport,
+      }
+
+      activeTouchGesture.longPressTimer = window.setTimeout(() => {
+        if (!activeTouchGesture || activeTouchGesture.hasMoved) return
+        activeTouchGesture.isLongPress = true
+        lastTapAt = 0
+        allowSyntheticSelectionDoubleClick = true
+        dispatchSyntheticDoubleClick(
+          activeTouchGesture.target,
+          activeTouchGesture.startX,
+          activeTouchGesture.startY,
+          frame,
+        )
+        allowSyntheticSelectionDoubleClick = false
+        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+      }, TOUCH_LONG_PRESS_MS)
+    }
+
+    const updateTouchPan = (clientX: number, clientY: number, event: Event) => {
+      if (!activeTouchGesture || activeTouchGesture.isLongPress) return
+
+      const deltaX = clientX - activeTouchGesture.startX
+      const deltaY = clientY - activeTouchGesture.startY
+      const distance = Math.hypot(deltaX, deltaY)
+      if (distance >= TOUCH_PAN_THRESHOLD_PX) {
+        activeTouchGesture.hasMoved = true
+        clearLongPressTimer()
+        lastTapAt = 0
+      }
+
+      stopTouchSelectionEvent(event)
+
+      if (!activeTouchGesture.hasMoved) return
+      activeTouchGesture.viewport.scrollLeft = activeTouchGesture.startScrollLeft - deltaX
+      activeTouchGesture.viewport.scrollTop = activeTouchGesture.startScrollTop - deltaY
+    }
+
+    const finishTouchGesture = (clientX: number, clientY: number, event: Event) => {
+      if (!activeTouchGesture) return
+
+      const wasTap = !activeTouchGesture.hasMoved && !activeTouchGesture.isLongPress
+      const wasPan = activeTouchGesture.hasMoved
+      const wasLongPress = activeTouchGesture.isLongPress
+      clearLongPressTimer()
+
+      if (wasTap) {
+        const now = performance.now()
+        const isDoublePress = lastTapAt > 0
+          && now - lastTapAt <= TOUCH_DOUBLE_PRESS_MAX_MS
+          && Math.hypot(clientX - lastTapX, clientY - lastTapY) <= TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX
+
+        if (isDoublePress) {
+          event.preventDefault()
+          lastTapAt = 0
+          suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
+          requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
+        } else {
+          lastTapAt = now
+          lastTapX = clientX
+          lastTapY = clientY
+        }
+      }
+
+      if (wasPan || wasLongPress) {
+        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+        lastTapAt = 0
+      }
+
+      activeTouchGesture = null
+    }
 
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return
@@ -183,10 +377,169 @@ function SyncedPdfWorkspace({
       })
     }
 
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!isTouchPointer(event) || isInteractiveTouchTarget(event.target)) return
+
+      activeTouchPoints.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: event.target,
+      })
+
+      const pinchPoints = getPinchPoints()
+      if (pinchPoints) {
+        beginPinchGesture(pinchPoints)
+        stopTouchSelectionEvent(event)
+        return
+      }
+
+      if (!isPrimaryTouchPointer(event)) return
+      beginTouchGesture(event.pointerId, event.clientX, event.clientY, event.target)
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!isTouchPointer(event) || !activeTouchPoints.has(event.pointerId)) return
+
+      activeTouchPoints.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: event.target,
+      })
+
+      const pinchPoints = getPinchPoints()
+      if (activePinchGesture || pinchPoints) {
+        if (pinchPoints) updatePinchGesture(pinchPoints, event)
+        return
+      }
+
+      if (!isPrimaryTouchPointer(event)) return
+      if (activeTouchGesture?.pointerId !== event.pointerId) return
+      updateTouchPan(event.clientX, event.clientY, event)
+    }
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+
+      if (activePinchGesture || activeTouchPoints.size >= 2) {
+        activeTouchPoints.delete(event.pointerId)
+        resetTouchGesture()
+        resetPinchGesture()
+        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+        stopTouchSelectionEvent(event)
+        return
+      }
+
+      activeTouchPoints.delete(event.pointerId)
+      if (!isPrimaryTouchPointer(event)) return
+      if (activeTouchGesture?.pointerId !== event.pointerId) return
+      finishTouchGesture(event.clientX, event.clientY, event)
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+      activeTouchPoints.delete(event.pointerId)
+      resetPinchGesture()
+      if (activeTouchGesture?.pointerId !== event.pointerId) return
+      resetTouchGesture()
+      lastTapAt = 0
+    }
+
+    const handleTouchStart = (event: TouchEvent) => {
+      if (typeof PointerEvent !== 'undefined') return
+
+      if (event.touches.length >= 2) {
+        const pinchPoints = touchListToPinchPoints(event.touches)
+        if (!pinchPoints) return
+        beginPinchGesture(pinchPoints)
+        stopTouchSelectionEvent(event)
+        return
+      }
+
+      if (event.touches.length !== 1) return
+      const touch = event.touches[0]
+      beginTouchGesture('touch', touch.clientX, touch.clientY, event.target)
+    }
+
+    const handleTouchMove = (event: TouchEvent) => {
+      if (typeof PointerEvent !== 'undefined') return
+
+      if (event.touches.length >= 2) {
+        const pinchPoints = touchListToPinchPoints(event.touches)
+        if (pinchPoints) updatePinchGesture(pinchPoints, event)
+        return
+      }
+
+      if (activeTouchGesture?.pointerId !== 'touch') return
+      const touch = event.touches[0]
+      if (!touch) return
+      updateTouchPan(touch.clientX, touch.clientY, event)
+    }
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      if (typeof PointerEvent !== 'undefined') return
+
+      if (activePinchGesture || event.touches.length >= 2) {
+        resetTouchGesture()
+        resetPinchGesture()
+        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
+        stopTouchSelectionEvent(event)
+        return
+      }
+
+      if (activeTouchGesture?.pointerId !== 'touch') return
+      const touch = event.changedTouches[0]
+      if (!touch) {
+        resetTouchGesture()
+        return
+      }
+      finishTouchGesture(touch.clientX, touch.clientY, event)
+    }
+
+    const handleTouchCancel = () => {
+      if (typeof PointerEvent !== 'undefined') return
+      resetPinchGesture()
+      if (activeTouchGesture?.pointerId !== 'touch') return
+      resetTouchGesture()
+      lastTapAt = 0
+    }
+
+    const handleSyntheticMouseEvent = (event: MouseEvent) => {
+      if (allowSyntheticSelectionDoubleClick && event.type === 'dblclick') return
+      if (performance.now() > suppressMouseUntil && !mouseEventCameFromTouch(event)) return
+
+      event.preventDefault()
+      event.stopPropagation()
+    }
+
     frame.addEventListener('wheel', handleWheel, { passive: false, capture: true })
+    frame.addEventListener('pointerdown', handlePointerDown, { passive: false, capture: true })
+    frame.addEventListener('pointermove', handlePointerMove, { passive: false, capture: true })
+    frame.addEventListener('pointerup', handlePointerUp, { passive: false, capture: true })
+    frame.addEventListener('pointercancel', handlePointerCancel, { passive: true, capture: true })
+    frame.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true })
+    frame.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true })
+    frame.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true })
+    frame.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true })
+    frame.addEventListener('click', handleSyntheticMouseEvent, { passive: false, capture: true })
+    frame.addEventListener('dblclick', handleSyntheticMouseEvent, { passive: false, capture: true })
+    frame.addEventListener('contextmenu', handleSyntheticMouseEvent, { passive: false, capture: true })
 
     return () => {
+      resetTouchGesture()
+      activeTouchPoints.clear()
+      resetPinchGesture()
       frame.removeEventListener('wheel', handleWheel, true)
+      frame.removeEventListener('pointerdown', handlePointerDown, true)
+      frame.removeEventListener('pointermove', handlePointerMove, true)
+      frame.removeEventListener('pointerup', handlePointerUp, true)
+      frame.removeEventListener('pointercancel', handlePointerCancel, true)
+      frame.removeEventListener('touchstart', handleTouchStart, true)
+      frame.removeEventListener('touchmove', handleTouchMove, true)
+      frame.removeEventListener('touchend', handleTouchEnd, true)
+      frame.removeEventListener('touchcancel', handleTouchCancel, true)
+      frame.removeEventListener('click', handleSyntheticMouseEvent, true)
+      frame.removeEventListener('dblclick', handleSyntheticMouseEvent, true)
+      frame.removeEventListener('contextmenu', handleSyntheticMouseEvent, true)
     }
   }, [])
 
@@ -484,7 +837,11 @@ function SyncedPdfWorkspace({
             <Scroller
               documentId={documentId}
               renderPage={({ pageIndex }) => (
-                <PagePointerProvider documentId={documentId} pageIndex={pageIndex}>
+                <PagePointerProvider
+                  className="pdf-page-touch-target"
+                  documentId={documentId}
+                  pageIndex={pageIndex}
+                >
                   <RenderLayer
                     aria-hidden="true"
                     className="pdf-render-layer"
@@ -581,6 +938,149 @@ function annotationRowHasPluginState(
 
 function createRowId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`}`
+}
+
+function isTouchPointer(event: PointerEvent): boolean {
+  return event.pointerType === 'touch'
+}
+
+function isPrimaryTouchPointer(event: PointerEvent): boolean {
+  return event.pointerType === 'touch' && event.isPrimary !== false
+}
+
+function isInteractiveTouchTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest([
+    '.selection-menu',
+    'button',
+    'input',
+    'textarea',
+    'select',
+    '[contenteditable="true"]',
+    '[data-touch-gesture-ignore]',
+  ].join(',')))
+}
+
+function stopTouchSelectionEvent(event: Event) {
+  if (event.cancelable) event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+}
+
+function dispatchSyntheticDoubleClick(
+  target: EventTarget | null,
+  clientX: number,
+  clientY: number,
+  frame: HTMLElement,
+) {
+  const targetElement = target instanceof Element && frame.contains(target)
+    ? target
+    : document.elementFromPoint(clientX, clientY)
+
+  if (!(targetElement instanceof Element) || !frame.contains(targetElement)) return
+
+  targetElement.dispatchEvent(new MouseEvent('dblclick', {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    buttons: 0,
+    clientX,
+    clientY,
+    view: window,
+  }))
+}
+
+function requestTouchDoublePressZoom(
+  clientX: number,
+  clientY: number,
+  frame: HTMLElement,
+  zoomRef: ZoomScopeRef,
+  touchZoomBaselineRef: { current: number | null },
+) {
+  const zoomScope = zoomRef.current
+  if (!zoomScope) return
+
+  const viewport = frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
+  const viewportRect = viewport.getBoundingClientRect()
+  const center = {
+    vx: clientX - viewportRect.left,
+    vy: clientY - viewportRect.top,
+  }
+  const currentZoom = zoomScope.getState().currentZoomLevel || 1
+  const baseline = touchZoomBaselineRef.current
+  const shouldUnzoom = baseline !== null
+    ? currentZoom > baseline * 1.15
+    : currentZoom >= 2
+
+  if (shouldUnzoom) {
+    touchZoomBaselineRef.current = null
+    zoomScope.requestZoom(ZoomMode.FitWidth, center)
+    return
+  }
+
+  touchZoomBaselineRef.current = currentZoom
+  zoomScope.requestZoom(Math.min(Math.max(currentZoom * 1.75, currentZoom + 0.65, 1.5), 3), center)
+}
+
+function requestTouchPinchZoom(
+  points: readonly [TouchGesturePoint, TouchGesturePoint],
+  pinchGesture: ActivePinchGesture,
+  frame: HTMLElement,
+  zoomRef: ZoomScopeRef,
+) {
+  const zoomScope = zoomRef.current
+  if (!zoomScope) return
+
+  const distance = touchPointDistance(points[0], points[1])
+  if (pinchGesture.startDistance <= 0 || distance <= 0) return
+
+  const viewport = frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
+  const viewportRect = viewport.getBoundingClientRect()
+  const midpoint = touchPointMidpoint(points[0], points[1])
+  const nextZoom = pinchGesture.startZoom * (distance / pinchGesture.startDistance)
+
+  zoomScope.requestZoom(nextZoom, {
+    vx: midpoint.clientX - viewportRect.left,
+    vy: midpoint.clientY - viewportRect.top,
+  })
+}
+
+function touchPointDistance(first: TouchGesturePoint, second: TouchGesturePoint): number {
+  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY)
+}
+
+function touchPointMidpoint(first: TouchGesturePoint, second: TouchGesturePoint): TouchGesturePoint {
+  return {
+    clientX: (first.clientX + second.clientX) / 2,
+    clientY: (first.clientY + second.clientY) / 2,
+    target: first.target,
+  }
+}
+
+function touchListToPinchPoints(touches: TouchList): readonly [TouchGesturePoint, TouchGesturePoint] | null {
+  const first = touches[0]
+  const second = touches[1]
+  if (!first || !second) return null
+
+  return [
+    {
+      clientX: first.clientX,
+      clientY: first.clientY,
+      target: first.target,
+    },
+    {
+      clientX: second.clientX,
+      clientY: second.clientY,
+      target: second.target,
+    },
+  ]
+}
+
+function mouseEventCameFromTouch(event: MouseEvent): boolean {
+  const sourceCapabilities = (event as MouseEvent & {
+    sourceCapabilities?: { firesTouchEvents?: boolean } | null
+  }).sourceCapabilities
+
+  return sourceCapabilities?.firesTouchEvents === true
 }
 
 function wheelEventToZoomDelta(event: WheelEvent, currentZoom: number): number {

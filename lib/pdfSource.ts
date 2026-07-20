@@ -1,3 +1,5 @@
+import { fileNameFromGithubLikeUrl } from './githubDocuments'
+
 export type RemotePdfSource = {
   kind: 'remote';
   documentKey: string;
@@ -40,7 +42,8 @@ export function createRemotePdfSource(rawUrl: string): RemotePdfSource {
 
   parsed.hash = '';
   const originalUrl = parsed.toString();
-  const pathName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).at(-1) ?? '');
+  const pathName = fileNameFromGithubLikeUrl(originalUrl)
+    ?? decodeURIComponent(parsed.pathname.split('/').filter(Boolean).at(-1) ?? '');
 
   return {
     kind: 'remote',
