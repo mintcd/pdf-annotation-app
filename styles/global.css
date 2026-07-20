@@ -2375,9 +2375,8 @@ body,
 }
 
 .dashboard-github-entry-actions {
-  display: grid;
-  grid-template-columns: repeat(2, 2rem);
-  align-content: center;
+  display: flex;
+  align-items: center;
   gap: var(--ds-space-2);
 }
 

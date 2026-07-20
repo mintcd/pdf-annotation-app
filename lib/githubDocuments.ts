@@ -40,7 +40,7 @@ export type GithubDocumentsUploadResponse = {
 
 export type GithubDocumentsMutationResponse = {
   config: GithubDocumentsConfig
-  action: 'create-folder' | 'rename' | 'delete'
+  action: 'create-folder' | 'rename' | 'move' | 'delete'
   path: string
   parentPath: string
   commitSha: string

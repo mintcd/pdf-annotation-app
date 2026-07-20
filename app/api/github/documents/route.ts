@@ -53,6 +53,7 @@ type GithubDocumentsActionRequest = {
   path?: unknown
   entryPath?: unknown
   entryType?: unknown
+  targetPath?: unknown
   name?: unknown
 }
 
@@ -247,6 +248,42 @@ async function handleGithubDocumentsAction(
     if (nextPath === entryPath) {
       throw new GithubDocumentsError('Enter a different name.')
     }
+    await assertPathDoesNotExist(config, nextPath, token)
+    const commitSha = await renameGithubEntry({
+      config,
+      token,
+      entryPath,
+      entryType,
+      nextPath,
+    })
+
+    return Response.json({
+      config,
+      action,
+      path: nextPath,
+      parentPath,
+      commitSha,
+    }, {
+      headers: { 'cache-control': 'no-store' },
+    })
+  }
+
+  if (action === 'move') {
+    const entryPath = normalizeGithubPath(typeof body.entryPath === 'string' ? body.entryPath : '')
+    const entryType = readGithubEntryType(body.entryType)
+    assertDirectGithubChild(parentPath, entryPath)
+    if (entryType !== 'file') {
+      throw new GithubDocumentsError('Only files can be moved from this view.')
+    }
+
+    const targetPath = normalizeGithubPath(typeof body.targetPath === 'string' ? body.targetPath : '')
+    const fileName = githubPathName(entryPath)
+    const nextPath = joinGithubPath(targetPath, fileName)
+    if (nextPath === entryPath) {
+      throw new GithubDocumentsError('Choose a different destination folder.')
+    }
+
+    await assertGithubFolderExists(config, targetPath, token)
     await assertPathDoesNotExist(config, nextPath, token)
     const commitSha = await renameGithubEntry({
       config,
@@ -596,6 +633,12 @@ function readGithubEntryType(value: unknown): 'dir' | 'file' {
   throw new GithubDocumentsError('GitHub entry type must be file or folder.')
 }
 
+function githubPathName(path: string): string {
+  const name = path.split('/').filter(Boolean).at(-1) ?? ''
+  if (!name) throw new GithubDocumentsError('Choose a GitHub file.')
+  return name
+}
+
 function assertDirectGithubChild(parentPath: string, entryPath: string): void {
   if (!entryPath) throw new GithubDocumentsError('Choose a GitHub file or folder.')
   if (!parentPath) {
@@ -760,6 +803,45 @@ async function assertPathDoesNotExist(
   const body = await response.json().catch(() => null) as { message?: unknown } | null
   if (typeof body?.message === 'string') message = body.message
   throw new GithubDocumentsError(message, 502)
+}
+
+async function assertGithubFolderExists(
+  config: GithubDocumentsConfig,
+  path: string,
+  token: string,
+): Promise<void> {
+  if (!path) return
+
+  const response = await fetch(
+    githubContentsApiUrl({
+      owner: config.owner,
+      repo: config.repo,
+      path,
+      ref: config.branch,
+    }),
+    {
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${token}`,
+        'user-agent': 'pdf-annotation-app',
+        'x-github-api-version': GITHUB_API_VERSION,
+      },
+    },
+  )
+  if (response.status === 404) {
+    throw new GithubDocumentsError('Choose an existing destination folder.')
+  }
+  if (!response.ok) {
+    let message = `GitHub returned HTTP ${response.status}.`
+    const errorBody = await response.json().catch(() => null) as { message?: unknown } | null
+    if (typeof errorBody?.message === 'string') message = errorBody.message
+    throw new GithubDocumentsError(message, 502)
+  }
+
+  const body = await response.json().catch(() => null)
+  if (!Array.isArray(body)) {
+    throw new GithubDocumentsError('Choose an existing destination folder.')
+  }
 }
 
 async function fileToBase64(file: File): Promise<string> {

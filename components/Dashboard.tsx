@@ -46,6 +46,8 @@ import { TextField } from './design-system/text-field'
 import { AnnotationNoteEditor } from './AnnotationNoteEditor'
 import { createRemotePdfSource } from '../lib/pdfSource'
 import {
+  githubBlobUrl,
+  githubCdnUrl,
   pathFromGithubBlobUrl,
   type GithubDocumentEntry,
   type GithubDocumentsConfig,
@@ -99,6 +101,11 @@ type GithubEntryDeletePrompt = {
 type GithubEntryRenameState = {
   entry: GithubDocumentEntry
   name: string
+}
+
+type GithubEntryMoveState = {
+  entry: GithubDocumentEntry
+  path: string
 }
 
 function formatUpdatedAt(value: string): string {
@@ -179,6 +186,28 @@ function safeRemotePdfOpenHref(rawUrl: string | null): string | null {
   } catch {
     return null
   }
+}
+
+function githubPathName(path: string): string {
+  return path.split('/').filter(Boolean).at(-1) ?? ''
+}
+
+function githubParentPath(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  parts.pop()
+  return parts.join('/')
+}
+
+function githubFileCdnUrl(config: GithubDocumentsConfig, path: string): string {
+  return githubCdnUrl(
+    githubBlobUrl({
+      owner: config.owner,
+      repo: config.repo,
+      branch: config.branch,
+      path,
+    }),
+    config.cdnUrl,
+  )
 }
 
 function documentLocation(document: PdfDocumentRow): { host: string; path: string } {
@@ -440,6 +469,7 @@ function AuthenticatedDashboard() {
   const [githubUploadMessage, setGithubUploadMessage] = useState<string | null>(null)
   const [githubCreateFolderName, setGithubCreateFolderName] = useState('')
   const [githubRenameState, setGithubRenameState] = useState<GithubEntryRenameState | null>(null)
+  const [githubMoveState, setGithubMoveState] = useState<GithubEntryMoveState | null>(null)
   const [githubDeletePrompt, setGithubDeletePrompt] = useState<GithubEntryDeletePrompt | null>(null)
   const [githubMutating, setGithubMutating] = useState(false)
   const [githubMutationError, setGithubMutationError] = useState<string | null>(null)
@@ -605,6 +635,7 @@ function AuthenticatedDashboard() {
       setGithubUploadMessage(null)
       setGithubMutationError(null)
       setGithubRenameState(null)
+      setGithubMoveState(null)
       setGithubPath(entry.path)
       return
     }
@@ -615,6 +646,7 @@ function AuthenticatedDashboard() {
     setGithubUploadMessage(null)
     setGithubMutationError(null)
     setGithubRenameState(null)
+    setGithubMoveState(null)
     setGithubPath(path)
   }
 
@@ -679,8 +711,8 @@ function AuthenticatedDashboard() {
   const runGithubMutation = async (
     payload: Record<string, unknown>,
     successMessage: (body: GithubDocumentsMutationResponse) => string,
-  ): Promise<boolean> => {
-    if (githubMutating) return false
+  ): Promise<GithubDocumentsMutationResponse | null> => {
+    if (githubMutating) return null
 
     setGithubMutating(true)
     setGithubMutationError(null)
@@ -714,12 +746,140 @@ function AuthenticatedDashboard() {
       invalidateGithubReplica()
       setGithubUploadMessage(successMessage(body as GithubDocumentsMutationResponse))
       await loadGithubDocuments(githubPath)
-      return true
+      return body as GithubDocumentsMutationResponse
     } catch (error) {
       setGithubMutationError(error instanceof Error ? error.message : 'GitHub storage action failed.')
-      return false
+      return null
     } finally {
       setGithubMutating(false)
+    }
+  }
+
+  const syncEditedGithubFileDocument = async ({
+    oldPath,
+    oldUrl,
+    nextPath,
+    nextUrl,
+  }: {
+    oldPath: string
+    oldUrl: string
+    nextPath: string
+    nextUrl: string
+  }): Promise<number | null> => {
+    const oldSource = createRemotePdfSource(oldUrl)
+    const nextSource = createRemotePdfSource(nextUrl)
+    const current = documents.find((document) => {
+      const url = documentUrl(document)
+      return document.id === oldSource.documentKey
+        || document.source_key === oldSource.documentKey
+        || document.source_url === oldSource.originalUrl
+        || Boolean(url && pathFromGithubBlobUrl(url) === oldPath)
+    })
+    if (!current) return null
+
+    const nextTitle = nextSource.name
+    const annotationCount = current.annotations.length
+    const now = syncTimestamp()
+    const existingTarget = documents.find((document) => {
+      if (document.id === current.id) return false
+      const url = documentUrl(document)
+      return document.id === nextSource.documentKey
+        || document.source_key === nextSource.documentKey
+        || document.source_url === nextSource.originalUrl
+        || Boolean(url && pathFromGithubBlobUrl(url) === nextPath)
+    })
+
+    if (current.id === nextSource.documentKey) {
+      await documentsTable.put({
+        ...documentRowFromSummary(current),
+        source_key: nextSource.documentKey,
+        source_type: 'remote',
+        source_url: nextSource.originalUrl,
+        file_name: nextSource.name,
+        title: nextTitle,
+        number_of_annotations: annotationCount,
+        updated_at: now,
+      })
+      flushSync('updated GitHub PDF document location')
+      return annotationCount
+    }
+
+    if (existingTarget) {
+      const targetAnnotationCount = existingTarget.annotations.length + annotationCount
+      await documentsTable.put({
+        ...documentRowFromSummary(existingTarget),
+        source_key: nextSource.documentKey,
+        source_type: 'remote',
+        source_url: nextSource.originalUrl,
+        file_name: nextSource.name,
+        title: nextTitle,
+        number_of_annotations: targetAnnotationCount,
+        updated_at: now,
+      })
+      for (const annotation of current.annotations) {
+        await annotationsTable.put({
+          ...annotation,
+          document_id: existingTarget.id,
+          updated_at: now,
+        })
+      }
+      await documentsTable.delete({ id: current.id })
+      if (selectedId === current.id) setSelectedId(existingTarget.id)
+      flushSync('updated GitHub PDF document location')
+      return annotationCount
+    }
+
+    const nextDocument: PdfDocumentRow = {
+      ...documentRowFromSummary(current),
+      id: nextSource.documentKey,
+      source_key: nextSource.documentKey,
+      source_type: 'remote',
+      source_url: nextSource.originalUrl,
+      file_name: nextSource.name,
+      title: nextTitle,
+      number_of_annotations: annotationCount,
+      updated_at: now,
+    }
+    await documentsTable.put(nextDocument)
+    for (const annotation of current.annotations) {
+      await annotationsTable.put({
+        ...annotation,
+        document_id: nextDocument.id,
+        updated_at: now,
+      })
+    }
+    await documentsTable.delete({ id: current.id })
+    if (selectedId === current.id) setSelectedId(nextDocument.id)
+    flushSync('updated GitHub PDF document location')
+    return annotationCount
+  }
+
+  const syncEditedGithubFileDocumentFromMutation = async (
+    entry: GithubDocumentEntry,
+    result: GithubDocumentsMutationResponse,
+    successLabel: string,
+  ) => {
+    if (entry.type !== 'file') return
+
+    const oldUrl = entry.cdnUrl ?? (githubConfig ? githubFileCdnUrl(githubConfig, entry.path) : null)
+    if (!oldUrl) return
+
+    try {
+      const annotationCount = await syncEditedGithubFileDocument({
+        oldPath: entry.path,
+        oldUrl,
+        nextPath: result.path,
+        nextUrl: githubFileCdnUrl(result.config, result.path),
+      })
+      if (annotationCount && annotationCount > 0) {
+        setGithubUploadMessage(`${successLabel} and kept ${annotationCount} annotation${annotationCount === 1 ? '' : 's'}`)
+      }
+    } catch (error) {
+      setGithubMutationError(
+        `GitHub file changed, but annotation records were not updated: ${
+          error instanceof Error ? error.message : 'local database update failed'
+        }`,
+      )
     }
   }
 
@@ -731,7 +891,7 @@ function AuthenticatedDashboard() {
       return
     }
 
-    const success = await runGithubMutation(
+    const result = await runGithubMutation(
       {
         action: 'create-folder',
         path: githubPath,
@@ -739,7 +899,7 @@ function AuthenticatedDashboard() {
       },
       () => `Created folder ${name}`,
     )
-    if (success) setGithubCreateFolderName('')
+    if (result) setGithubCreateFolderName('')
   }
 
   const saveGithubRename = async (event: FormEvent<HTMLFormElement>) => {
@@ -747,27 +907,62 @@ function AuthenticatedDashboard() {
     if (!githubRenameState) return
 
     const name = githubRenameState.name.trim()
+    const entry = githubRenameState.entry
     if (!name) {
       setGithubMutationError('Enter a name.')
       return
     }
 
-    const previousName = githubRenameState.entry.name
-    const success = await runGithubMutation(
+    const previousName = entry.name
+    const result = await runGithubMutation(
       {
         action: 'rename',
         path: githubPath,
-        entryPath: githubRenameState.entry.path,
-        entryType: githubRenameState.entry.type,
+        entryPath: entry.path,
+        entryType: entry.type,
         name,
       },
       () => `Renamed ${previousName} to ${name}`,
     )
-    if (success) setGithubRenameState(null)
+    if (result) {
+      await syncEditedGithubFileDocumentFromMutation(entry, result, `Renamed ${previousName} to ${name}`)
+      setGithubRenameState(null)
+    }
+  }
+
+  const startGithubMove = (entry: GithubDocumentEntry) => {
+    const childFolder = githubEntries.find((candidate) => candidate.type === 'dir')?.path
+    setGithubRenameState(null)
+    setGithubMoveState({
+      entry,
+      path: childFolder ?? githubParentPath(githubPath),
+    })
+  }
+
+  const saveGithubMove = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!githubMoveState) return
+
+    const entry = githubMoveState.entry
+    const targetPath = githubMoveState.path.trim()
+    const result = await runGithubMutation(
+      {
+        action: 'move',
+        path: githubPath,
+        entryPath: entry.path,
+        entryType: entry.type,
+        targetPath,
+      },
+      () => `Moved ${entry.name}`,
+    )
+    if (result) {
+      await syncEditedGithubFileDocumentFromMutation(entry, result, `Moved ${entry.name}`)
+      setGithubMoveState(null)
+    }
   }
 
   const deleteGithubEntry = async (prompt: GithubEntryDeletePrompt) => {
-    const success = await runGithubMutation(
+    const result = await runGithubMutation(
       {
         action: 'delete',
         path: prompt.parentPath,
@@ -776,7 +971,7 @@ function AuthenticatedDashboard() {
       },
       () => `Deleted ${prompt.entry.name}`,
     )
-    if (success) setGithubDeletePrompt(null)
+    if (result) setGithubDeletePrompt(null)
   }
 
   const saveDocumentTitle = async (document: DocumentSummary, title: string) => {
@@ -784,6 +979,31 @@ function AuthenticatedDashboard() {
     setSavingTitle(true)
 
     try {
+      const githubPath = document.source_url ? pathFromGithubBlobUrl(document.source_url) : null
+      if (githubPath) {
+        const previousName = githubPathName(githubPath)
+        const result = await runGithubMutation(
+          {
+            action: 'rename',
+            path: githubParentPath(githubPath),
+            entryPath: githubPath,
+            entryType: 'file',
+            name: nextTitle,
+          },
+          () => `Renamed ${previousName} to ${nextTitle}`,
+        )
+        if (!result) return
+
+        await syncEditedGithubFileDocument({
+          oldPath: githubPath,
+          oldUrl: document.source_url,
+          nextPath: result.path,
+          nextUrl: githubFileCdnUrl(result.config, result.path),
+        })
+        setEditingTitle(false)
+        return
+      }
+
       await documentsTable.put({
         ...documentRowFromSummary(document),
         title: nextTitle,
@@ -982,6 +1202,7 @@ function AuthenticatedDashboard() {
             githubCreateFolderName={githubCreateFolderName}
             githubMutating={githubMutating}
             githubMutationError={githubMutationError}
+            githubMoveState={githubMoveState}
             githubRenameState={githubRenameState}
             highlightColors={highlightColors.data}
             highlightColorsLoading={highlightColors.loading}
@@ -1006,13 +1227,22 @@ function AuthenticatedDashboard() {
             onGithubCreateFolderNameChange={setGithubCreateFolderName}
             onGithubDeleteEntry={(entry) => setGithubDeletePrompt({ entry, parentPath: githubPath })}
             onGithubEntryOpen={openGithubEntry}
+            onGithubMoveCancel={() => setGithubMoveState(null)}
+            onGithubMovePathChange={(path) => {
+              setGithubMoveState((current) => current ? { ...current, path } : current)
+            }}
+            onGithubMoveStart={startGithubMove}
+            onGithubMoveSubmit={saveGithubMove}
             onGithubPathChange={navigateGithubPath}
             onGithubRefresh={refreshGithubDocuments}
             onGithubRenameCancel={() => setGithubRenameState(null)}
             onGithubRenameNameChange={(name) => {
               setGithubRenameState((current) => current ? { ...current, name } : current)
             }}
-            onGithubRenameStart={(entry) => setGithubRenameState({ entry, name: entry.name })}
+            onGithubRenameStart={(entry) => {
+              setGithubMoveState(null)
+              setGithubRenameState({ entry, name: entry.name })
+            }}
             onGithubRenameSubmit={saveGithubRename}
             onGithubUpload={uploadGithubPdf}
             onSaveHighlightColor={saveHighlightColor}
@@ -1080,6 +1310,7 @@ function PdfLibrary({
   githubCreateFolderName,
   githubMutating,
   githubMutationError,
+  githubMoveState,
   githubRenameState,
   highlightColors,
   highlightColorsLoading,
@@ -1101,6 +1332,10 @@ function PdfLibrary({
   onGithubCreateFolderNameChange,
   onGithubDeleteEntry,
   onGithubEntryOpen,
+  onGithubMoveCancel,
+  onGithubMovePathChange,
+  onGithubMoveStart,
+  onGithubMoveSubmit,
   onGithubPathChange,
   onGithubRefresh,
   onGithubRenameCancel,
@@ -1129,6 +1364,7 @@ function PdfLibrary({
   githubCreateFolderName: string
   githubMutating: boolean
   githubMutationError: string | null
+  githubMoveState: GithubEntryMoveState | null
   githubRenameState: GithubEntryRenameState | null
   highlightColors: readonly HighlightColor[]
   highlightColorsLoading: boolean
@@ -1150,6 +1386,10 @@ function PdfLibrary({
   onGithubCreateFolderNameChange: (value: string) => void
   onGithubDeleteEntry: (entry: GithubDocumentEntry) => void
   onGithubEntryOpen: (entry: GithubDocumentEntry) => void
+  onGithubMoveCancel: () => void
+  onGithubMovePathChange: (value: string) => void
+  onGithubMoveStart: (entry: GithubDocumentEntry) => void
+  onGithubMoveSubmit: (event: FormEvent<HTMLFormElement>) => void
   onGithubPathChange: (path: string) => void
   onGithubRefresh: () => void
   onGithubRenameCancel: () => void
@@ -1263,11 +1503,16 @@ function PdfLibrary({
           createFolderName={githubCreateFolderName}
           mutating={githubMutating}
           mutationError={githubMutationError}
+          moveState={githubMoveState}
           renameState={githubRenameState}
           onCreateFolder={onGithubCreateFolder}
           onCreateFolderNameChange={onGithubCreateFolderNameChange}
           onDeleteEntry={onGithubDeleteEntry}
           onEntryOpen={onGithubEntryOpen}
+          onMoveCancel={onGithubMoveCancel}
+          onMovePathChange={onGithubMovePathChange}
+          onMoveStart={onGithubMoveStart}
+          onMoveSubmit={onGithubMoveSubmit}
           onPathChange={onGithubPathChange}
           onRefresh={onGithubRefresh}
           onRenameCancel={onGithubRenameCancel}
@@ -1358,11 +1603,16 @@ function GithubStoragePanel({
   createFolderName,
   mutating,
   mutationError,
+  moveState,
   renameState,
   onCreateFolder,
   onCreateFolderNameChange,
   onDeleteEntry,
   onEntryOpen,
+  onMoveCancel,
+  onMovePathChange,
+  onMoveStart,
+  onMoveSubmit,
   onPathChange,
   onRefresh,
   onRenameCancel,
@@ -1382,11 +1632,16 @@ function GithubStoragePanel({
   createFolderName: string
   mutating: boolean
   mutationError: string | null
+  moveState: GithubEntryMoveState | null
   renameState: GithubEntryRenameState | null
   onCreateFolder: (event: FormEvent<HTMLFormElement>) => void
   onCreateFolderNameChange: (value: string) => void
   onDeleteEntry: (entry: GithubDocumentEntry) => void
   onEntryOpen: (entry: GithubDocumentEntry) => void
+  onMoveCancel: () => void
+  onMovePathChange: (value: string) => void
+  onMoveStart: (entry: GithubDocumentEntry) => void
+  onMoveSubmit: (event: FormEvent<HTMLFormElement>) => void
   onPathChange: (path: string) => void
   onRefresh: () => void
   onRenameCancel: () => void
@@ -1514,6 +1769,7 @@ function GithubStoragePanel({
           visibleEntries.map((entry) => {
             const pdfHref = entry.type === 'file' ? safeRemotePdfOpenHref(entry.cdnUrl) : null
             const isRenaming = renameState?.entry.path === entry.path
+            const isMoving = moveState?.entry.path === entry.path
             if (isRenaming) {
               return (
                 <form
@@ -1552,6 +1808,51 @@ function GithubStoragePanel({
                     size="small"
                     disabled={mutating}
                     onClick={onRenameCancel}
+                  >
+                    <X aria-hidden="true" />
+                  </IconButton>
+                </form>
+              )
+            }
+            if (isMoving) {
+              return (
+                <form
+                  key={entry.path}
+                  className="dashboard-github-entry-edit"
+                  onSubmit={onMoveSubmit}
+                >
+                  <span className="dashboard-github-entry-icon" aria-hidden="true">
+                    <Folder />
+                  </span>
+                  <input
+                    value={moveState.path}
+                    aria-label={`Move ${entry.name} to folder`}
+                    placeholder="Destination folder path"
+                    disabled={mutating}
+                    onChange={(event) => onMovePathChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        onMoveCancel()
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <IconButton
+                    label={`Move ${entry.name}`}
+                    title="Move"
+                    type="submit"
+                    size="small"
+                    disabled={mutating}
+                  >
+                    <Check aria-hidden="true" />
+                  </IconButton>
+                  <IconButton
+                    label={`Cancel move for ${entry.name}`}
+                    title="Cancel"
+                    size="small"
+                    disabled={mutating}
+                    onClick={onMoveCancel}
                   >
                     <X aria-hidden="true" />
                   </IconButton>
@@ -1603,6 +1904,17 @@ function GithubStoragePanel({
                   >
                     <Edit2 aria-hidden="true" />
                   </IconButton>
+                  {entry.type === 'file' && (
+                    <IconButton
+                      label={`Move ${entry.name}`}
+                      title="Move"
+                      size="small"
+                      disabled={!canUpload || mutating}
+                      onClick={() => onMoveStart(entry)}
+                    >
+                      <ArrowRight aria-hidden="true" />
+                    </IconButton>
+                  )}
                   <IconButton
                     label={`Delete ${entry.name}`}
                     title="Delete"
