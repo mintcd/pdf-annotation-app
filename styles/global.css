@@ -248,6 +248,8 @@ button:disabled {
 
 .toolbar-group {
   display: inline-flex;
+  min-width: max-content;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
 }
@@ -260,12 +262,14 @@ button:disabled {
 .toolbar-divider {
   width: 1px;
   height: 24px;
+  flex: 0 0 auto;
   background: var(--border);
 }
 
 .icon-button,
 .panel-toggle {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   min-width: 36px;
@@ -284,14 +288,18 @@ button:disabled {
 
 .page-control {
   display: inline-flex;
+  min-width: max-content;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   color: var(--muted);
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .page-control input {
   width: 46px;
+  flex: 0 0 auto;
   height: 34px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -302,6 +310,7 @@ button:disabled {
 
 .zoom-value {
   width: 52px;
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 13px;
   text-align: center;
@@ -803,10 +812,10 @@ button:disabled {
     flex-wrap: wrap;
   }
 
-  .history-separator,
-  .history-controls,
-  .toolbar-download,
-  .fit-button {
+  .viewer-toolbar .history-separator,
+  .viewer-toolbar .history-controls,
+  .viewer-toolbar .toolbar-download,
+  .viewer-toolbar .fit-button {
     display: none;
   }
 }
@@ -3271,12 +3280,24 @@ body,
     flex-wrap: nowrap;
     gap: var(--ds-space-1);
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 0.45rem 0.55rem calc(0.45rem + env(safe-area-inset-bottom));
     border-top: 1px solid var(--ds-color-border);
     border-bottom: 0;
     background: rgba(255, 255, 255, 0.97);
     scrollbar-width: none;
+    touch-action: pan-x;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .viewer-toolbar .toolbar-group,
+  .viewer-toolbar .toolbar-separator,
+  .viewer-toolbar .icon-button,
+  .viewer-toolbar .panel-toggle,
+  .viewer-toolbar .page-control,
+  .viewer-toolbar .zoom-value {
+    min-width: max-content;
+    flex: 0 0 auto;
   }
 
   .viewer-toolbar::-webkit-scrollbar {
@@ -3303,6 +3324,10 @@ body,
 
   .viewer-toolbar .toolbar-save-status,
   .viewer-toolbar .toolbar-spacer {
+    display: none;
+  }
+
+  .viewer-toolbar .toolbar-download {
     display: none;
   }
 
@@ -3340,6 +3365,13 @@ body,
   .color-swatch {
     width: 30px;
     height: 30px;
+  }
+}
+
+@media (max-width: 480px) and (pointer: coarse) {
+  .viewer-toolbar .zoom-separator,
+  .viewer-toolbar .zoom-controls {
+    display: none;
   }
 }
 

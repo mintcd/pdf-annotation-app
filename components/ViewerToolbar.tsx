@@ -99,7 +99,7 @@ export default function ViewerToolbar({
 
   return (
     <Toolbar className="viewer-toolbar" aria-label="PDF controls">
-      <ToolbarGroup>
+      <ToolbarGroup className="toolbar-group page-controls">
         <button
           className="icon-button"
           type="button"
@@ -137,9 +137,9 @@ export default function ViewerToolbar({
         </button>
       </ToolbarGroup>
 
-      <ToolbarSeparator />
+      <ToolbarSeparator className="toolbar-separator zoom-separator" />
 
-      <ToolbarGroup>
+      <ToolbarGroup className="toolbar-group zoom-controls">
         <button className="icon-button" type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom?.zoomOut()} disabled={!zoom}>
           <ZoomOut size={17} aria-hidden="true" />
         </button>
@@ -159,9 +159,9 @@ export default function ViewerToolbar({
         </button>
       </ToolbarGroup>
 
-      <ToolbarSeparator className="history-separator" />
+      <ToolbarSeparator className="toolbar-separator history-separator" />
 
-      <ToolbarGroup className="history-controls">
+      <ToolbarGroup className="toolbar-group history-controls">
         <button className="icon-button" type="button" aria-label="Undo" title="Undo" disabled={!historyState.canUndo} onClick={() => history?.undo()}>
           <Undo2 size={17} aria-hidden="true" />
         </button>

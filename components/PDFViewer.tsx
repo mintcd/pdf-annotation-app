@@ -24,7 +24,7 @@ import { RenderLayer, RenderPluginPackage } from '@embedpdf/plugin-render/react'
 import { Scroller, ScrollPluginPackage, useScroll } from '@embedpdf/plugin-scroll/react'
 import { SelectionLayer, SelectionPluginPackage } from '@embedpdf/plugin-selection/react'
 import { Viewport, ViewportPluginPackage } from '@embedpdf/plugin-viewport/react'
-import { useZoom, ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
+import { useZoom, ZoomGestureWrapper, ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PdfSource } from '../lib/pdfSource'
 import { sourceForEmbedPdf } from '../lib/pdfSource'
@@ -58,25 +58,9 @@ type ActiveTouchGesture = {
   hasMoved: boolean
   isLongPress: boolean
   longPressTimer: number | null
-  pointerId: number | 'touch'
-  startScrollLeft: number
-  startScrollTop: number
   startX: number
   startY: number
   target: EventTarget | null
-  viewport: HTMLElement
-}
-
-type TouchGesturePoint = {
-  clientX: number
-  clientY: number
-  target: EventTarget | null
-}
-
-type ActivePinchGesture = {
-  hasZoomed: boolean
-  startDistance: number
-  startZoom: number
 }
 
 type ZoomScopeRef = { current: ReturnType<typeof useZoom>['provides'] }
@@ -86,8 +70,6 @@ const TOUCH_DOUBLE_PRESS_MAX_MS = 320
 const TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX = 34
 const TOUCH_LONG_PRESS_MS = 540
 const TOUCH_MOUSE_SUPPRESSION_MS = 700
-const TOUCH_PINCH_THRESHOLD_PX = 6
-const TOUCH_MIN_PINCH_DISTANCE_PX = 28
 
 export default function PDFViewer({ source, initialAnnotationId }: PDFViewerProps) {
   const documentOptions = useMemo(() => sourceForEmbedPdf(source), [source])
@@ -216,10 +198,6 @@ function SyncedPdfWorkspace({
     let lastTapY = 0
     let suppressMouseUntil = 0
     let allowSyntheticSelectionDoubleClick = false
-    let activePinchGesture: ActivePinchGesture | null = null
-    const activeTouchPoints = new Map<number, TouchGesturePoint>()
-
-    const getViewport = () => frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
 
     const clearLongPressTimer = () => {
       if (!activeTouchGesture?.longPressTimer) return
@@ -232,71 +210,21 @@ function SyncedPdfWorkspace({
       activeTouchGesture = null
     }
 
-    const resetPinchGesture = () => {
-      activePinchGesture = null
-      lastTapAt = 0
-    }
-
-    const getPinchPoints = () => {
-      const points = [...activeTouchPoints.values()]
-      return points.length >= 2 ? [points[0], points[1]] as const : null
-    }
-
-    const beginPinchGesture = (points: readonly [TouchGesturePoint, TouchGesturePoint]) => {
-      const zoomScope = zoomRef.current
-      const distance = touchPointDistance(points[0], points[1])
-      if (!zoomScope || distance < TOUCH_MIN_PINCH_DISTANCE_PX) return
-
-      resetTouchGesture()
-      lastTapAt = 0
-      activePinchGesture = {
-        hasZoomed: false,
-        startDistance: distance,
-        startZoom: zoomScope.getState().currentZoomLevel || 1,
-      }
-      suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
-    }
-
-    const updatePinchGesture = (
-      points: readonly [TouchGesturePoint, TouchGesturePoint],
-      event: Event,
-    ) => {
-      if (!activePinchGesture) beginPinchGesture(points)
-      if (!activePinchGesture) return
-
-      stopTouchSelectionEvent(event)
-
-      const distance = touchPointDistance(points[0], points[1])
-      if (distance < TOUCH_MIN_PINCH_DISTANCE_PX) return
-      const distanceDelta = Math.abs(distance - activePinchGesture.startDistance)
-      if (!activePinchGesture.hasZoomed && distanceDelta < TOUCH_PINCH_THRESHOLD_PX) return
-
-      activePinchGesture.hasZoomed = true
-      suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
-      requestTouchPinchZoom(points, activePinchGesture, frame, zoomRef)
-    }
-
     const beginTouchGesture = (
-      pointerId: number | 'touch',
       clientX: number,
       clientY: number,
       target: EventTarget | null,
     ) => {
       if (isInteractiveTouchTarget(target)) return
 
-      const viewport = getViewport()
       resetTouchGesture()
       activeTouchGesture = {
         hasMoved: false,
         isLongPress: false,
         longPressTimer: null,
-        pointerId,
-        startScrollLeft: viewport.scrollLeft,
-        startScrollTop: viewport.scrollTop,
         startX: clientX,
         startY: clientY,
         target,
-        viewport,
       }
 
       activeTouchGesture.longPressTimer = window.setTimeout(() => {
@@ -315,7 +243,7 @@ function SyncedPdfWorkspace({
       }, TOUCH_LONG_PRESS_MS)
     }
 
-    const updateTouchPan = (clientX: number, clientY: number, event: Event) => {
+    const updateTouchGesture = (clientX: number, clientY: number) => {
       if (!activeTouchGesture || activeTouchGesture.isLongPress) return
 
       const deltaX = clientX - activeTouchGesture.startX
@@ -326,12 +254,6 @@ function SyncedPdfWorkspace({
         clearLongPressTimer()
         lastTapAt = 0
       }
-
-      stopTouchSelectionEvent(event)
-
-      if (!activeTouchGesture.hasMoved) return
-      activeTouchGesture.viewport.scrollLeft = activeTouchGesture.startScrollLeft - deltaX
-      activeTouchGesture.viewport.scrollTop = activeTouchGesture.startScrollTop - deltaY
     }
 
     const finishTouchGesture = (clientX: number, clientY: number, event: Event) => {
@@ -349,7 +271,8 @@ function SyncedPdfWorkspace({
           && Math.hypot(clientX - lastTapX, clientY - lastTapY) <= TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX
 
         if (isDoublePress) {
-          event.preventDefault()
+          if (event.cancelable) event.preventDefault()
+          event.stopPropagation()
           lastTapAt = 0
           suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
           requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
@@ -368,137 +291,37 @@ function SyncedPdfWorkspace({
       activeTouchGesture = null
     }
 
-    const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey) return
-
-      const zoomScope = zoomRef.current
-      if (!zoomScope) return
-
-      event.preventDefault()
-      event.stopPropagation()
-
-      const viewport = frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
-      const viewportRect = viewport.getBoundingClientRect()
-      const currentZoom = zoomScope.getState().currentZoomLevel
-      const zoomDelta = wheelEventToZoomDelta(event, currentZoom)
-      if (zoomDelta === 0) return
-
-      zoomScope.requestZoomBy(zoomDelta, {
-        vx: event.clientX - viewportRect.left,
-        vy: event.clientY - viewportRect.top,
-      })
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!isTouchPointer(event) || isInteractiveTouchTarget(event.target)) return
-
-      activeTouchPoints.set(event.pointerId, {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        target: event.target,
-      })
-
-      const pinchPoints = getPinchPoints()
-      if (pinchPoints) {
-        beginPinchGesture(pinchPoints)
-        stopTouchSelectionEvent(event)
-        return
-      }
-
-      if (!isPrimaryTouchPointer(event)) return
-      beginTouchGesture(event.pointerId, event.clientX, event.clientY, event.target)
-    }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!isTouchPointer(event) || !activeTouchPoints.has(event.pointerId)) return
-
-      activeTouchPoints.set(event.pointerId, {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        target: event.target,
-      })
-
-      const pinchPoints = getPinchPoints()
-      if (activePinchGesture || pinchPoints) {
-        if (pinchPoints) updatePinchGesture(pinchPoints, event)
-        return
-      }
-
-      if (!isPrimaryTouchPointer(event)) return
-      if (activeTouchGesture?.pointerId !== event.pointerId) return
-      updateTouchPan(event.clientX, event.clientY, event)
-    }
-
-    const handlePointerUp = (event: PointerEvent) => {
-      if (!isTouchPointer(event)) return
-
-      if (activePinchGesture || activeTouchPoints.size >= 2) {
-        activeTouchPoints.delete(event.pointerId)
-        resetTouchGesture()
-        resetPinchGesture()
-        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
-        stopTouchSelectionEvent(event)
-        return
-      }
-
-      activeTouchPoints.delete(event.pointerId)
-      if (!isPrimaryTouchPointer(event)) return
-      if (activeTouchGesture?.pointerId !== event.pointerId) return
-      finishTouchGesture(event.clientX, event.clientY, event)
-    }
-
-    const handlePointerCancel = (event: PointerEvent) => {
-      if (!isTouchPointer(event)) return
-      activeTouchPoints.delete(event.pointerId)
-      resetPinchGesture()
-      if (activeTouchGesture?.pointerId !== event.pointerId) return
-      resetTouchGesture()
-      lastTapAt = 0
-    }
-
     const handleTouchStart = (event: TouchEvent) => {
-      if (typeof PointerEvent !== 'undefined') return
-
       if (event.touches.length >= 2) {
-        const pinchPoints = touchListToPinchPoints(event.touches)
-        if (!pinchPoints) return
-        beginPinchGesture(pinchPoints)
-        stopTouchSelectionEvent(event)
+        resetTouchGesture()
+        lastTapAt = 0
         return
       }
 
       if (event.touches.length !== 1) return
       const touch = event.touches[0]
-      beginTouchGesture('touch', touch.clientX, touch.clientY, event.target)
+      beginTouchGesture(touch.clientX, touch.clientY, event.target)
     }
 
     const handleTouchMove = (event: TouchEvent) => {
-      if (typeof PointerEvent !== 'undefined') return
-
       if (event.touches.length >= 2) {
-        const pinchPoints = touchListToPinchPoints(event.touches)
-        if (pinchPoints) updatePinchGesture(pinchPoints, event)
+        resetTouchGesture()
+        lastTapAt = 0
         return
       }
 
-      if (activeTouchGesture?.pointerId !== 'touch') return
       const touch = event.touches[0]
       if (!touch) return
-      updateTouchPan(touch.clientX, touch.clientY, event)
+      updateTouchGesture(touch.clientX, touch.clientY)
     }
 
     const handleTouchEnd = (event: TouchEvent) => {
-      if (typeof PointerEvent !== 'undefined') return
-
-      if (activePinchGesture || event.touches.length >= 2) {
+      if (event.touches.length > 0) {
         resetTouchGesture()
-        resetPinchGesture()
-        suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
-        stopTouchSelectionEvent(event)
+        lastTapAt = 0
         return
       }
 
-      if (activeTouchGesture?.pointerId !== 'touch') return
       const touch = event.changedTouches[0]
       if (!touch) {
         resetTouchGesture()
@@ -508,28 +331,20 @@ function SyncedPdfWorkspace({
     }
 
     const handleTouchCancel = () => {
-      if (typeof PointerEvent !== 'undefined') return
-      resetPinchGesture()
-      if (activeTouchGesture?.pointerId !== 'touch') return
       resetTouchGesture()
       lastTapAt = 0
     }
 
     const handleSyntheticMouseEvent = (event: MouseEvent) => {
       if (allowSyntheticSelectionDoubleClick && event.type === 'dblclick') return
-      if (performance.now() > suppressMouseUntil && !mouseEventCameFromTouch(event)) return
+      if (performance.now() > suppressMouseUntil) return
 
       event.preventDefault()
       event.stopPropagation()
     }
 
-    frame.addEventListener('wheel', handleWheel, { passive: false, capture: true })
-    frame.addEventListener('pointerdown', handlePointerDown, { passive: false, capture: true })
-    frame.addEventListener('pointermove', handlePointerMove, { passive: false, capture: true })
-    frame.addEventListener('pointerup', handlePointerUp, { passive: false, capture: true })
-    frame.addEventListener('pointercancel', handlePointerCancel, { passive: true, capture: true })
-    frame.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true })
-    frame.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true })
+    frame.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true })
+    frame.addEventListener('touchmove', handleTouchMove, { passive: true, capture: true })
     frame.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true })
     frame.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true })
     frame.addEventListener('click', handleSyntheticMouseEvent, { passive: false, capture: true })
@@ -538,13 +353,6 @@ function SyncedPdfWorkspace({
 
     return () => {
       resetTouchGesture()
-      activeTouchPoints.clear()
-      resetPinchGesture()
-      frame.removeEventListener('wheel', handleWheel, true)
-      frame.removeEventListener('pointerdown', handlePointerDown, true)
-      frame.removeEventListener('pointermove', handlePointerMove, true)
-      frame.removeEventListener('pointerup', handlePointerUp, true)
-      frame.removeEventListener('pointercancel', handlePointerCancel, true)
       frame.removeEventListener('touchstart', handleTouchStart, true)
       frame.removeEventListener('touchmove', handleTouchMove, true)
       frame.removeEventListener('touchend', handleTouchEnd, true)
@@ -846,46 +654,48 @@ function SyncedPdfWorkspace({
             className="pdf-viewport"
             style={{ backgroundColor: '#f4f6f8' }}
           >
-            <Scroller
-              documentId={documentId}
-              renderPage={({ pageIndex }) => (
-                <PagePointerProvider
-                  className="pdf-page-touch-target"
-                  documentId={documentId}
-                  pageIndex={pageIndex}
-                >
-                  <RenderLayer
-                    aria-hidden="true"
-                    className="pdf-render-layer"
-                    documentId={documentId}
-                    draggable={false}
-                    onDragStart={(event) => event.preventDefault()}
-                    pageIndex={pageIndex}
-                    style={{ pointerEvents: 'none' }}
-                  />
-                  <SelectionLayer
+            <ZoomGestureWrapper className="pdf-zoom-gesture-wrapper" documentId={documentId}>
+              <Scroller
+                documentId={documentId}
+                renderPage={({ pageIndex }) => (
+                  <PagePointerProvider
+                    className="pdf-page-touch-target"
                     documentId={documentId}
                     pageIndex={pageIndex}
-                    selectionMenu={({ menuWrapperProps }) => (
-                      <div
-                        {...menuWrapperProps}
-                        className="selection-menu-anchor"
-                        style={menuWrapperProps.style}
-                      >
-                        <SelectionPanel
-                          color={highlightColor}
-                          documentId={documentId}
-                          highlightColors={highlightColors.data}
-                          onColorChange={setHighlightColor}
-                          onCreateHighlight={createHighlight}
-                        />
-                      </div>
-                    )}
-                  />
-                  <AnnotationLayer documentId={documentId} pageIndex={pageIndex} />
-                </PagePointerProvider>
-              )}
-            />
+                  >
+                    <RenderLayer
+                      aria-hidden="true"
+                      className="pdf-render-layer"
+                      documentId={documentId}
+                      draggable={false}
+                      onDragStart={(event) => event.preventDefault()}
+                      pageIndex={pageIndex}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                    <SelectionLayer
+                      documentId={documentId}
+                      pageIndex={pageIndex}
+                      selectionMenu={({ menuWrapperProps }) => (
+                        <div
+                          {...menuWrapperProps}
+                          className="selection-menu-anchor"
+                          style={menuWrapperProps.style}
+                        >
+                          <SelectionPanel
+                            color={highlightColor}
+                            documentId={documentId}
+                            highlightColors={highlightColors.data}
+                            onColorChange={setHighlightColor}
+                            onCreateHighlight={createHighlight}
+                          />
+                        </div>
+                      )}
+                    />
+                    <AnnotationLayer documentId={documentId} pageIndex={pageIndex} />
+                  </PagePointerProvider>
+                )}
+              />
+            </ZoomGestureWrapper>
           </Viewport>
         </div>
       </div>
