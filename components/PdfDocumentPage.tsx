@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
 import { createRemotePdfSource } from '../lib/pdfSource'
@@ -17,6 +17,7 @@ type PdfDocumentPageProps = {
 export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumentPageProps) {
   const sync = usePdfSyncEngine()
   const [chromeVisible, setChromeVisible] = useState(true)
+  const pageRef = useRef<HTMLElement>(null)
   const result = useMemo(() => {
     try {
       return { source: createRemotePdfSource(url), error: '' }
@@ -39,6 +40,30 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
   useEffect(() => {
     setChromeVisible(true)
   }, [source?.documentKey])
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) setChromeVisible(true)
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
+
+  const toggleFullscreen = useCallback(() => {
+    const nextVisible = !chromeVisible
+    const page = pageRef.current
+
+    setChromeVisible(nextVisible)
+
+    if (page && document.fullscreenEnabled) {
+      if (nextVisible && document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => undefined)
+      } else if (!nextVisible && !document.fullscreenElement) {
+        void page.requestFullscreen().catch(() => undefined)
+      }
+    }
+  }, [chromeVisible])
 
   useEffect(() => {
     if (!source || !sync.session.authenticated) return
@@ -94,7 +119,10 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
   }
 
   return (
-    <main className={`pdf-document-page${chromeVisible ? '' : ' is-chrome-hidden'}`}>
+    <main
+      ref={pageRef}
+      className={`pdf-document-page${chromeVisible ? '' : ' is-chrome-hidden'}`}
+    >
       <header className="document-header">
         <IconButton
           label="Back to dashboard"
@@ -125,7 +153,8 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
       <PDFViewer
         source={source}
         initialAnnotationId={initialAnnotationId}
-        onChromeToggle={() => setChromeVisible((visible) => !visible)}
+        chromeVisible={chromeVisible}
+        onChromeToggle={toggleFullscreen}
       />
     </main>
   )

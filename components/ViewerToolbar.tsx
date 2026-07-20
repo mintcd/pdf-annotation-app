@@ -30,6 +30,7 @@ type ViewerToolbarProps = {
   annotationCount: number;
   annotationsOpen: boolean;
   documentId: string;
+  onChromeToggle?: () => void;
   onAnnotationsToggle: () => void;
   onOutlineToggle: () => void;
   outlineOpen: boolean;
@@ -40,6 +41,7 @@ export default function ViewerToolbar({
   annotationCount,
   annotationsOpen,
   documentId,
+  onChromeToggle,
   onAnnotationsToggle,
   onOutlineToggle,
   outlineOpen,
@@ -136,6 +138,18 @@ export default function ViewerToolbar({
           <ChevronRight size={18} aria-hidden="true" />
         </button>
       </ToolbarGroup>
+
+      {onChromeToggle && (
+        <button
+          className="icon-button fullscreen-toggle"
+          type="button"
+          aria-label="Enter fullscreen"
+          title="Enter fullscreen"
+          onClick={onChromeToggle}
+        >
+          <Maximize2 size={16} aria-hidden="true" />
+        </button>
+      )}
 
       <ToolbarSeparator className="toolbar-separator zoom-separator" />
 

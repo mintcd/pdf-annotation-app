@@ -25,7 +25,8 @@ import { Scroller, ScrollPluginPackage, useScroll } from '@embedpdf/plugin-scrol
 import { SelectionLayer, SelectionPluginPackage } from '@embedpdf/plugin-selection/react'
 import { Viewport, ViewportPluginPackage } from '@embedpdf/plugin-viewport/react'
 import { useZoom, ZoomGestureWrapper, ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Minimize2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PdfSource } from '../lib/pdfSource'
 import { sourceForEmbedPdf } from '../lib/pdfSource'
 import {
@@ -50,6 +51,7 @@ import { usePdfSyncEngine } from './SyncEngineProvider'
 import ViewerToolbar, { type PersistenceStatus } from './ViewerToolbar'
 
 type PDFViewerProps = {
+  chromeVisible?: boolean
   source: PdfSource
   initialAnnotationId?: string
   onChromeToggle?: () => void
@@ -59,9 +61,13 @@ type ActiveTouchGesture = {
   hasMoved: boolean
   isLongPress: boolean
   longPressTimer: number | null
+  pointerId: number | null
+  startScrollLeft: number
+  startScrollTop: number
   startX: number
   startY: number
   target: EventTarget | null
+  viewport: HTMLElement
 }
 
 type ZoomScopeRef = { current: ReturnType<typeof useZoom>['provides'] }
@@ -72,7 +78,12 @@ const TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX = 34
 const TOUCH_LONG_PRESS_MS = 540
 const TOUCH_MOUSE_SUPPRESSION_MS = 700
 
-export default function PDFViewer({ source, initialAnnotationId, onChromeToggle }: PDFViewerProps) {
+export default function PDFViewer({
+  chromeVisible = true,
+  source,
+  initialAnnotationId,
+  onChromeToggle,
+}: PDFViewerProps) {
   const documentOptions = useMemo(() => sourceForEmbedPdf(source), [source])
   const plugins = useMemo(
     () => [
@@ -128,6 +139,7 @@ export default function PDFViewer({ source, initialAnnotationId, onChromeToggle 
 
                 return (
                   <SyncedPdfWorkspace
+                    chromeVisible={chromeVisible}
                     documentId={activeDocumentId}
                     initialAnnotationId={initialAnnotationId}
                     onChromeToggle={onChromeToggle}
@@ -144,11 +156,13 @@ export default function PDFViewer({ source, initialAnnotationId, onChromeToggle 
 }
 
 function SyncedPdfWorkspace({
+  chromeVisible,
   documentId,
   initialAnnotationId,
   onChromeToggle,
   source,
 }: {
+  chromeVisible: boolean
   documentId: string
   initialAnnotationId?: string
   onChromeToggle?: () => void
@@ -166,7 +180,7 @@ function SyncedPdfWorkspace({
   const [documentRow, setDocumentRow] = useState<PdfDocumentRow | null>(null)
   const [documentError, setDocumentError] = useState('')
   const [highlightColor, setHighlightColor] = useState<string>(FALLBACK_HIGHLIGHT_COLOR)
-  const [panelOpen, setPanelOpen] = useState(true)
+  const [panelOpen, setPanelOpen] = useState(false)
   const [panelMode, setPanelMode] = useState<'outline' | 'annotations'>('annotations')
   const localWriteIds = useRef(new Set<string>())
   const initialSelectionHandled = useRef(false)
@@ -174,7 +188,6 @@ function SyncedPdfWorkspace({
   const syncFlushRef = useRef(sync.sync)
   const zoomRef = useRef(zoom)
   const touchZoomBaselineRef = useRef<number | null>(null)
-  const chromeToggleTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     syncFlushRef.current = sync.sync
@@ -183,38 +196,6 @@ function SyncedPdfWorkspace({
   useEffect(() => {
     zoomRef.current = zoom
   }, [zoom])
-
-  const cancelPendingChromeToggle = useCallback(() => {
-    if (chromeToggleTimerRef.current === null) return
-    window.clearTimeout(chromeToggleTimerRef.current)
-    chromeToggleTimerRef.current = null
-  }, [])
-
-  const scheduleChromeToggle = useCallback(() => {
-    if (!onChromeToggle) return
-
-    cancelPendingChromeToggle()
-    chromeToggleTimerRef.current = window.setTimeout(() => {
-      chromeToggleTimerRef.current = null
-      onChromeToggle()
-    }, TOUCH_DOUBLE_PRESS_MAX_MS + 40)
-  }, [cancelPendingChromeToggle, onChromeToggle])
-
-  const handleViewportClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (!onChromeToggle || event.defaultPrevented) return
-
-    if (event.detail > 1) {
-      cancelPendingChromeToggle()
-      return
-    }
-
-    if (isInteractiveTouchTarget(event.target)) return
-    scheduleChromeToggle()
-  }, [cancelPendingChromeToggle, onChromeToggle, scheduleChromeToggle])
-
-  useEffect(() => {
-    return cancelPendingChromeToggle
-  }, [cancelPendingChromeToggle])
 
   useEffect(() => {
     if (
@@ -235,6 +216,8 @@ function SyncedPdfWorkspace({
     let lastTapY = 0
     let suppressMouseUntil = 0
     let allowSyntheticSelectionDoubleClick = false
+    const activeTouchPointers = new Set<number>()
+    const supportsPointerEvents = typeof window.PointerEvent !== 'undefined'
 
     const clearLongPressTimer = () => {
       if (!activeTouchGesture?.longPressTimer) return
@@ -251,17 +234,23 @@ function SyncedPdfWorkspace({
       clientX: number,
       clientY: number,
       target: EventTarget | null,
+      pointerId: number | null = null,
     ) => {
       if (isInteractiveTouchTarget(target)) return
 
+      const viewport = findPdfViewport(frame)
       resetTouchGesture()
       activeTouchGesture = {
         hasMoved: false,
         isLongPress: false,
         longPressTimer: null,
+        pointerId,
+        startScrollLeft: viewport.scrollLeft,
+        startScrollTop: viewport.scrollTop,
         startX: clientX,
         startY: clientY,
         target,
+        viewport,
       }
 
       activeTouchGesture.longPressTimer = window.setTimeout(() => {
@@ -280,17 +269,30 @@ function SyncedPdfWorkspace({
       }, TOUCH_LONG_PRESS_MS)
     }
 
-    const updateTouchGesture = (clientX: number, clientY: number) => {
+    const updateTouchGesture = (clientX: number, clientY: number, event: Event) => {
       if (!activeTouchGesture || activeTouchGesture.isLongPress) return
 
       const deltaX = clientX - activeTouchGesture.startX
       const deltaY = clientY - activeTouchGesture.startY
       const distance = Math.hypot(deltaX, deltaY)
+      const shouldPan = activeTouchGesture.hasMoved || distance >= TOUCH_PAN_THRESHOLD_PX
+
+      if (!shouldPan) {
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      activeTouchGesture.viewport.scrollLeft = activeTouchGesture.startScrollLeft - deltaX
+      activeTouchGesture.viewport.scrollTop = activeTouchGesture.startScrollTop - deltaY
+
       if (distance >= TOUCH_PAN_THRESHOLD_PX) {
         activeTouchGesture.hasMoved = true
         clearLongPressTimer()
         lastTapAt = 0
       }
+
+      stopTouchSelectionEvent(event)
     }
 
     const finishTouchGesture = (clientX: number, clientY: number, event: Event) => {
@@ -307,13 +309,11 @@ function SyncedPdfWorkspace({
           && now - lastTapAt <= TOUCH_DOUBLE_PRESS_MAX_MS
           && Math.hypot(clientX - lastTapX, clientY - lastTapY) <= TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX
 
-          if (isDoublePress) {
-            if (event.cancelable) event.preventDefault()
-            event.stopPropagation()
-            cancelPendingChromeToggle()
-            lastTapAt = 0
-            suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
-            requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
+        if (isDoublePress) {
+          stopTouchSelectionEvent(event)
+          lastTapAt = 0
+          suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
+          requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
         } else {
           lastTapAt = now
           lastTapX = clientX
@@ -322,11 +322,59 @@ function SyncedPdfWorkspace({
       }
 
       if (wasPan || wasLongPress) {
+        stopTouchSelectionEvent(event)
         suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
         lastTapAt = 0
       }
 
       activeTouchGesture = null
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+
+      activeTouchPointers.add(event.pointerId)
+      if (!isPrimaryTouchPointer(event) || activeTouchPointers.size >= 2) {
+        resetTouchGesture()
+        lastTapAt = 0
+        return
+      }
+
+      beginTouchGesture(event.clientX, event.clientY, event.target, event.pointerId)
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (
+        !isPrimaryTouchPointer(event)
+        || activeTouchPointers.size !== 1
+        || activeTouchGesture?.pointerId !== event.pointerId
+      ) {
+        return
+      }
+
+      updateTouchGesture(event.clientX, event.clientY, event)
+    }
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+
+      activeTouchPointers.delete(event.pointerId)
+
+      if (activeTouchGesture?.pointerId === event.pointerId) {
+        finishTouchGesture(event.clientX, event.clientY, event)
+      } else if (activeTouchPointers.size === 0) {
+        resetTouchGesture()
+      }
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+
+      activeTouchPointers.delete(event.pointerId)
+      if (activeTouchGesture?.pointerId === event.pointerId) {
+        resetTouchGesture()
+        lastTapAt = 0
+      }
     }
 
     const handleTouchStart = (event: TouchEvent) => {
@@ -350,7 +398,7 @@ function SyncedPdfWorkspace({
 
       const touch = event.touches[0]
       if (!touch) return
-      updateTouchGesture(touch.clientX, touch.clientY)
+      updateTouchGesture(touch.clientX, touch.clientY, event)
     }
 
     const handleTouchEnd = (event: TouchEvent) => {
@@ -381,16 +429,28 @@ function SyncedPdfWorkspace({
       event.stopPropagation()
     }
 
-    frame.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true })
-    frame.addEventListener('touchmove', handleTouchMove, { passive: true, capture: true })
-    frame.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true })
-    frame.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true })
+    if (supportsPointerEvents) {
+      frame.addEventListener('pointerdown', handlePointerDown, { passive: true, capture: true })
+      frame.addEventListener('pointermove', handlePointerMove, { passive: false, capture: true })
+      frame.addEventListener('pointerup', handlePointerUp, { passive: false, capture: true })
+      frame.addEventListener('pointercancel', handlePointerCancel, { passive: true, capture: true })
+    } else {
+      frame.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true })
+      frame.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true })
+      frame.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true })
+      frame.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true })
+    }
     frame.addEventListener('click', handleSyntheticMouseEvent, { passive: false, capture: true })
     frame.addEventListener('dblclick', handleSyntheticMouseEvent, { passive: false, capture: true })
     frame.addEventListener('contextmenu', handleSyntheticMouseEvent, { passive: false, capture: true })
 
     return () => {
       resetTouchGesture()
+      activeTouchPointers.clear()
+      frame.removeEventListener('pointerdown', handlePointerDown, true)
+      frame.removeEventListener('pointermove', handlePointerMove, true)
+      frame.removeEventListener('pointerup', handlePointerUp, true)
+      frame.removeEventListener('pointercancel', handlePointerCancel, true)
       frame.removeEventListener('touchstart', handleTouchStart, true)
       frame.removeEventListener('touchmove', handleTouchMove, true)
       frame.removeEventListener('touchend', handleTouchEnd, true)
@@ -399,7 +459,7 @@ function SyncedPdfWorkspace({
       frame.removeEventListener('dblclick', handleSyntheticMouseEvent, true)
       frame.removeEventListener('contextmenu', handleSyntheticMouseEvent, true)
     }
-  }, [cancelPendingChromeToggle])
+  }, [])
 
   const flushSync = useCallback((label: string) => {
     void syncFlushRef.current().catch((error) => {
@@ -674,11 +734,25 @@ function SyncedPdfWorkspace({
           annotationCount={annotationRows.length}
           annotationsOpen={panelOpen && panelMode === 'annotations'}
           documentId={documentId}
+          onChromeToggle={onChromeToggle}
           onAnnotationsToggle={() => togglePanel('annotations')}
           onOutlineToggle={() => togglePanel('outline')}
           outlineOpen={panelOpen && panelMode === 'outline'}
           persistenceStatus={persistenceStatus}
         />
+
+        {!chromeVisible && onChromeToggle && (
+          <button
+            className="viewer-fullscreen-exit"
+            type="button"
+            aria-label="Exit fullscreen"
+            title="Exit fullscreen"
+            data-touch-gesture-ignore
+            onClick={onChromeToggle}
+          >
+            <Minimize2 size={18} aria-hidden="true" />
+          </button>
+        )}
 
         {documentError && (
           <div className="viewer-inline-error" role="alert">
@@ -689,8 +763,6 @@ function SyncedPdfWorkspace({
         <div
           className="pdf-viewport-frame"
           ref={pdfViewportFrameRef}
-          onClick={handleViewportClick}
-          onDoubleClick={cancelPendingChromeToggle}
         >
           <Viewport
             documentId={documentId}
@@ -817,6 +889,24 @@ function isInteractiveTouchTarget(target: EventTarget | null): boolean {
     '[contenteditable="true"]',
     '[data-touch-gesture-ignore]',
   ].join(',')))
+}
+
+function findPdfViewport(frame: HTMLElement): HTMLElement {
+  return frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
+}
+
+function isTouchPointer(event: PointerEvent): boolean {
+  return event.pointerType === 'touch'
+}
+
+function isPrimaryTouchPointer(event: PointerEvent): boolean {
+  return isTouchPointer(event) && event.isPrimary !== false
+}
+
+function stopTouchSelectionEvent(event: Event) {
+  if (event.cancelable) event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
 }
 
 function dispatchSyntheticDoubleClick(
