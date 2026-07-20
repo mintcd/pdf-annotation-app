@@ -48,6 +48,44 @@ type GithubUploadResult = {
   }
 }
 
+type GithubDocumentsActionRequest = {
+  action?: unknown
+  path?: unknown
+  entryPath?: unknown
+  entryType?: unknown
+  name?: unknown
+}
+
+type GithubRefResult = {
+  object?: {
+    sha?: unknown
+  }
+}
+
+type GithubCommitResult = {
+  sha?: unknown
+  tree?: {
+    sha?: unknown
+  }
+}
+
+type GithubTreeItem = {
+  path?: unknown
+  mode?: unknown
+  type?: unknown
+  sha?: unknown
+}
+
+type GithubTreeResult = {
+  sha?: unknown
+  tree?: unknown
+  truncated?: unknown
+}
+
+type GithubBlobResult = {
+  sha?: unknown
+}
+
 export async function GET(request: Request): Promise<Response> {
   try {
     const env = getEnv()
@@ -91,6 +129,11 @@ export async function POST(request: Request): Promise<Response> {
     const token = githubDocumentsToken(env)
     if (!token) {
       throw new GithubDocumentsError('Set GITHUB_DOCUMENTS_TOKEN to enable GitHub uploads.', 503)
+    }
+
+    const contentType = request.headers.get('content-type') ?? ''
+    if (contentType.toLowerCase().includes('application/json')) {
+      return await handleGithubDocumentsAction(request, config, token)
     }
 
     const formData = await request.formData()
@@ -151,6 +194,423 @@ export async function POST(request: Request): Promise<Response> {
     })
   } catch (error) {
     return githubDocumentsErrorResponse(error)
+  }
+}
+
+async function handleGithubDocumentsAction(
+  request: Request,
+  config: GithubDocumentsConfig,
+  token: string,
+): Promise<Response> {
+  const body = await request.json().catch(() => null) as GithubDocumentsActionRequest | null
+  if (!body || typeof body !== 'object') {
+    throw new GithubDocumentsError('Invalid GitHub storage action.')
+  }
+
+  const action = typeof body.action === 'string' ? body.action : ''
+  const parentPath = normalizeGithubPath(typeof body.path === 'string' ? body.path : '')
+
+  if (action === 'create-folder') {
+    const name = safeGithubFolderName(typeof body.name === 'string' ? body.name : '')
+    const folderPath = joinGithubPath(parentPath, name)
+    await assertPathDoesNotExist(config, folderPath, token)
+    const commitSha = await commitGithubTreeChanges({
+      config,
+      token,
+      message: `Create folder ${folderPath}`,
+      changes: [{
+        path: joinGithubPath(folderPath, '.gitkeep'),
+        content: '',
+      }],
+    })
+
+    return Response.json({
+      config,
+      action,
+      path: folderPath,
+      parentPath,
+      commitSha,
+    }, {
+      status: 201,
+      headers: { 'cache-control': 'no-store' },
+    })
+  }
+
+  if (action === 'rename') {
+    const entryPath = normalizeGithubPath(typeof body.entryPath === 'string' ? body.entryPath : '')
+    const entryType = readGithubEntryType(body.entryType)
+    assertDirectGithubChild(parentPath, entryPath)
+    const name = entryType === 'file'
+      ? safeGithubPdfFileName(typeof body.name === 'string' ? body.name : '')
+      : safeGithubFolderName(typeof body.name === 'string' ? body.name : '')
+    const nextPath = joinGithubPath(parentPath, name)
+    if (nextPath === entryPath) {
+      throw new GithubDocumentsError('Enter a different name.')
+    }
+    await assertPathDoesNotExist(config, nextPath, token)
+    const commitSha = await renameGithubEntry({
+      config,
+      token,
+      entryPath,
+      entryType,
+      nextPath,
+    })
+
+    return Response.json({
+      config,
+      action,
+      path: nextPath,
+      parentPath,
+      commitSha,
+    }, {
+      headers: { 'cache-control': 'no-store' },
+    })
+  }
+
+  if (action === 'delete') {
+    const entryPath = normalizeGithubPath(typeof body.entryPath === 'string' ? body.entryPath : '')
+    const entryType = readGithubEntryType(body.entryType)
+    assertDirectGithubChild(parentPath, entryPath)
+    const commitSha = await deleteGithubEntry({
+      config,
+      token,
+      entryPath,
+      entryType,
+    })
+
+    return Response.json({
+      config,
+      action,
+      path: entryPath,
+      parentPath,
+      commitSha,
+    }, {
+      headers: { 'cache-control': 'no-store' },
+    })
+  }
+
+  throw new GithubDocumentsError('Unsupported GitHub storage action.')
+}
+
+async function renameGithubEntry({
+  config,
+  entryPath,
+  entryType,
+  nextPath,
+  token,
+}: {
+  config: GithubDocumentsConfig
+  token: string
+  entryPath: string
+  entryType: 'dir' | 'file'
+  nextPath: string
+}): Promise<string> {
+  const base = await readGithubBranchBase(config, token)
+  const currentTree = await readGithubRecursiveTree(config, token, base.treeSha)
+  const changes: GithubTreeChange[] = []
+
+  if (entryType === 'file') {
+    const file = currentTree.find((item) => item.path === entryPath && item.type === 'blob')
+    if (!file) throw new GithubDocumentsError('GitHub file was not found.', 404)
+
+    changes.push({
+      path: nextPath,
+      mode: file.mode,
+      type: 'blob',
+      sha: file.sha,
+    })
+    changes.push({
+      path: entryPath,
+      mode: file.mode,
+      type: 'blob',
+      sha: null,
+    })
+  } else {
+    const oldPrefix = `${entryPath}/`
+    const moved = currentTree.filter((item) => item.type === 'blob' && item.path.startsWith(oldPrefix))
+    if (moved.length === 0) throw new GithubDocumentsError('GitHub folder was not found or is empty.', 404)
+
+    for (const item of moved) {
+      changes.push({
+        path: `${nextPath}/${item.path.slice(oldPrefix.length)}`,
+        mode: item.mode,
+        type: 'blob',
+        sha: item.sha,
+      })
+    }
+    for (const item of moved) {
+      changes.push({
+        path: item.path,
+        mode: item.mode,
+        type: 'blob',
+        sha: null,
+      })
+    }
+  }
+
+  return commitGithubTreeChanges({
+    config,
+    token,
+    base,
+    message: `Rename ${entryPath} to ${nextPath}`,
+    changes,
+  })
+}
+
+async function deleteGithubEntry({
+  config,
+  entryPath,
+  entryType,
+  token,
+}: {
+  config: GithubDocumentsConfig
+  token: string
+  entryPath: string
+  entryType: 'dir' | 'file'
+}): Promise<string> {
+  const base = await readGithubBranchBase(config, token)
+  const currentTree = await readGithubRecursiveTree(config, token, base.treeSha)
+  const changes: GithubTreeChange[] = []
+
+  if (entryType === 'file') {
+    const file = currentTree.find((item) => item.path === entryPath && item.type === 'blob')
+    if (!file) throw new GithubDocumentsError('GitHub file was not found.', 404)
+    changes.push({
+      path: entryPath,
+      mode: file.mode,
+      type: 'blob',
+      sha: null,
+    })
+  } else {
+    const oldPrefix = `${entryPath}/`
+    const deleted = currentTree.filter((item) => item.type === 'blob' && item.path.startsWith(oldPrefix))
+    if (deleted.length === 0) throw new GithubDocumentsError('GitHub folder was not found or is empty.', 404)
+    for (const item of deleted) {
+      changes.push({
+        path: item.path,
+        mode: item.mode,
+        type: 'blob',
+        sha: null,
+      })
+    }
+  }
+
+  return commitGithubTreeChanges({
+    config,
+    token,
+    base,
+    message: `Delete ${entryPath}`,
+    changes,
+  })
+}
+
+type GithubTreeChange = {
+  path: string
+  mode?: string
+  type?: 'blob'
+  sha?: string | null
+  content?: string
+}
+
+type GithubBranchBase = {
+  commitSha: string
+  treeSha: string
+}
+
+type NormalizedGithubTreeItem = {
+  path: string
+  mode: string
+  type: string
+  sha: string
+}
+
+async function commitGithubTreeChanges({
+  base,
+  changes,
+  config,
+  message,
+  token,
+}: {
+  config: GithubDocumentsConfig
+  token: string
+  message: string
+  changes: GithubTreeChange[]
+  base?: GithubBranchBase
+}): Promise<string> {
+  const resolvedBase = base ?? await readGithubBranchBase(config, token)
+  const tree = await Promise.all(changes.map(async (change) => {
+    if (change.content === undefined) return {
+      path: change.path,
+      mode: change.mode ?? '100644',
+      type: change.type ?? 'blob',
+      sha: change.sha ?? null,
+    }
+
+    const blobSha = await createGithubBlob(config, token, change.content)
+    return {
+      path: change.path,
+      mode: '100644',
+      type: 'blob',
+      sha: blobSha,
+    }
+  }))
+  const treeResponse = await githubFetch(
+    githubRepoApiUrl(config, '/git/trees'),
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        base_tree: resolvedBase.treeSha,
+        tree,
+      }),
+    },
+    token,
+  )
+  const treeBody = await treeResponse.json() as GithubTreeResult
+  const treeSha = typeof treeBody.sha === 'string' ? treeBody.sha : ''
+  if (!treeSha) throw new GithubDocumentsError('GitHub did not return a new tree SHA.', 502)
+
+  const commitResponse = await githubFetch(
+    githubRepoApiUrl(config, '/git/commits'),
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        tree: treeSha,
+        parents: [resolvedBase.commitSha],
+      }),
+    },
+    token,
+  )
+  const commitBody = await commitResponse.json() as GithubCommitResult
+  const commitSha = typeof commitBody.sha === 'string' ? commitBody.sha : ''
+  if (!commitSha) throw new GithubDocumentsError('GitHub did not return a new commit SHA.', 502)
+
+  await githubFetch(
+    githubRepoApiUrl(config, `/git/refs/heads/${encodeURIComponent(config.branch)}`),
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ sha: commitSha }),
+    },
+    token,
+  )
+
+  return commitSha
+}
+
+async function readGithubBranchBase(
+  config: GithubDocumentsConfig,
+  token: string,
+): Promise<GithubBranchBase> {
+  const refResponse = await githubFetch(
+    githubRepoApiUrl(config, `/git/ref/heads/${encodeURIComponent(config.branch)}`),
+    { method: 'GET' },
+    token,
+  )
+  const refBody = await refResponse.json() as GithubRefResult
+  const commitSha = typeof refBody.object?.sha === 'string' ? refBody.object.sha : ''
+  if (!commitSha) throw new GithubDocumentsError('GitHub branch ref did not include a commit SHA.', 502)
+
+  const commitResponse = await githubFetch(
+    githubRepoApiUrl(config, `/git/commits/${encodeURIComponent(commitSha)}`),
+    { method: 'GET' },
+    token,
+  )
+  const commitBody = await commitResponse.json() as GithubCommitResult
+  const treeSha = typeof commitBody.tree?.sha === 'string' ? commitBody.tree.sha : ''
+  if (!treeSha) throw new GithubDocumentsError('GitHub commit did not include a tree SHA.', 502)
+
+  return { commitSha, treeSha }
+}
+
+async function readGithubRecursiveTree(
+  config: GithubDocumentsConfig,
+  token: string,
+  treeSha: string,
+): Promise<NormalizedGithubTreeItem[]> {
+  const response = await githubFetch(
+    `${githubRepoApiUrl(config, `/git/trees/${encodeURIComponent(treeSha)}`)}?recursive=1`,
+    { method: 'GET' },
+    token,
+  )
+  const body = await response.json() as GithubTreeResult
+  if (body.truncated === true) {
+    throw new GithubDocumentsError('GitHub tree is too large to edit safely from this UI.', 409)
+  }
+  if (!Array.isArray(body.tree)) {
+    throw new GithubDocumentsError('GitHub did not return a tree listing.', 502)
+  }
+
+  return body.tree
+    .map((item) => normalizeGithubTreeItem(item as GithubTreeItem))
+    .filter((item): item is NormalizedGithubTreeItem => Boolean(item))
+}
+
+async function createGithubBlob(
+  config: GithubDocumentsConfig,
+  token: string,
+  content: string,
+): Promise<string> {
+  const response = await githubFetch(
+    githubRepoApiUrl(config, '/git/blobs'),
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        content,
+        encoding: 'utf-8',
+      }),
+    },
+    token,
+  )
+  const body = await response.json() as GithubBlobResult
+  const sha = typeof body.sha === 'string' ? body.sha : ''
+  if (!sha) throw new GithubDocumentsError('GitHub did not return a blob SHA.', 502)
+  return sha
+}
+
+function normalizeGithubTreeItem(item: GithubTreeItem): NormalizedGithubTreeItem | null {
+  const path = typeof item.path === 'string' ? item.path : ''
+  const mode = typeof item.mode === 'string' ? item.mode : ''
+  const type = typeof item.type === 'string' ? item.type : ''
+  const sha = typeof item.sha === 'string' ? item.sha : ''
+  if (!path || !mode || !type || !sha) return null
+  return { path, mode, type, sha }
+}
+
+function githubRepoApiUrl(config: GithubDocumentsConfig, path: string): string {
+  return `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}${path}`
+}
+
+function safeGithubFolderName(value: string): string {
+  const name = value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!name || name === '.' || name === '..') {
+    throw new GithubDocumentsError('Enter a valid folder name.')
+  }
+  return name
+}
+
+function readGithubEntryType(value: unknown): 'dir' | 'file' {
+  if (value === 'dir' || value === 'file') return value
+  throw new GithubDocumentsError('GitHub entry type must be file or folder.')
+}
+
+function assertDirectGithubChild(parentPath: string, entryPath: string): void {
+  if (!entryPath) throw new GithubDocumentsError('Choose a GitHub file or folder.')
+  if (!parentPath) {
+    if (!entryPath.includes('/')) return
+    throw new GithubDocumentsError('Only direct children of the opened folder can be edited.')
+  }
+
+  const prefix = `${parentPath}/`
+  if (!entryPath.startsWith(prefix)) {
+    throw new GithubDocumentsError('Only direct children of the opened folder can be edited.')
+  }
+
+  const relative = entryPath.slice(prefix.length)
+  if (!relative || relative.includes('/')) {
+    throw new GithubDocumentsError('Only direct children of the opened folder can be edited.')
   }
 }
 

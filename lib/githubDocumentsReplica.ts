@@ -84,6 +84,18 @@ export function mergeGithubDocumentsFetch(
   }
 }
 
+export function clearGithubDocumentsReplicaFolders(
+  current: GithubDocumentsReplica | null,
+): GithubDocumentsReplica | null {
+  if (!current) return null
+
+  return {
+    ...current,
+    folders: {},
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 function normalizeGithubDocumentsReplica(value: unknown): GithubDocumentsReplica | null {
   if (!value || typeof value !== 'object') return null
   const record = value as Partial<GithubDocumentsReplica>

@@ -7,6 +7,7 @@ import type { PdfHighlightAnnoObject, PdfAnnotationObject } from '@embedpdf/mode
 import {
   AnnotationLayer,
   AnnotationPluginPackage,
+  LockModeType,
   useAnnotation,
 } from '@embedpdf/plugin-annotation/react'
 import { BookmarkPluginPackage } from '@embedpdf/plugin-bookmark/react'
@@ -95,6 +96,7 @@ const TOUCH_MOUSE_SUPPRESSION_MS = 700
 const PDF_SCROLL_BUFFER_PAGES = 2
 const PDF_BITMAP_LOOKAHEAD_PAGES = 1
 const PDF_INTERACTION_LOOKAHEAD_PAGES = 1
+const PDF_LINK_CATEGORY = 'pdf-link'
 
 export default function PDFViewer({
   chromeVisible = true,
@@ -122,6 +124,16 @@ export default function PDFViewer({
       createPluginRegistration(AnnotationPluginPackage, {
         annotationAuthor: 'PDF Annotator',
         autoCommit: true,
+        locked: {
+          type: LockModeType.Include,
+          categories: [PDF_LINK_CATEGORY],
+        },
+        tools: [
+          {
+            id: 'link',
+            categories: [PDF_LINK_CATEGORY],
+          },
+        ],
       }),
       createPluginRegistration(ZoomPluginPackage, {
         defaultZoomLevel: ZoomMode.FitWidth,

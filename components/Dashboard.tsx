@@ -50,9 +50,11 @@ import {
   type GithubDocumentEntry,
   type GithubDocumentsConfig,
   type GithubDocumentsListResponse,
+  type GithubDocumentsMutationResponse,
   type GithubDocumentsUploadResponse,
 } from '../lib/githubDocuments'
 import {
+  clearGithubDocumentsReplicaFolders,
   folderSnapshotFromGithubReplica,
   mergeGithubDocumentsFetch,
   readGithubDocumentsReplica,
@@ -87,6 +89,16 @@ type EditingCommentState = {
   documentId: string
   annotationId: string
   comment: string
+}
+
+type GithubEntryDeletePrompt = {
+  entry: GithubDocumentEntry
+  parentPath: string
+}
+
+type GithubEntryRenameState = {
+  entry: GithubDocumentEntry
+  name: string
 }
 
 function formatUpdatedAt(value: string): string {
@@ -426,6 +438,11 @@ function AuthenticatedDashboard() {
   const [githubUploading, setGithubUploading] = useState(false)
   const [githubUploadError, setGithubUploadError] = useState<string | null>(null)
   const [githubUploadMessage, setGithubUploadMessage] = useState<string | null>(null)
+  const [githubCreateFolderName, setGithubCreateFolderName] = useState('')
+  const [githubRenameState, setGithubRenameState] = useState<GithubEntryRenameState | null>(null)
+  const [githubDeletePrompt, setGithubDeletePrompt] = useState<GithubEntryDeletePrompt | null>(null)
+  const [githubMutating, setGithubMutating] = useState(false)
+  const [githubMutationError, setGithubMutationError] = useState<string | null>(null)
   const githubReplicaRef = useRef<GithubDocumentsReplica | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
 
@@ -586,9 +603,19 @@ function AuthenticatedDashboard() {
     if (entry.type === 'dir') {
       setGithubUploadError(null)
       setGithubUploadMessage(null)
+      setGithubMutationError(null)
+      setGithubRenameState(null)
       setGithubPath(entry.path)
       return
     }
+  }
+
+  const navigateGithubPath = (path: string) => {
+    setGithubUploadError(null)
+    setGithubUploadMessage(null)
+    setGithubMutationError(null)
+    setGithubRenameState(null)
+    setGithubPath(path)
   }
 
   const refreshGithubDocuments = () => {
@@ -641,6 +668,115 @@ function AuthenticatedDashboard() {
     } finally {
       setGithubUploading(false)
     }
+  }
+
+  const invalidateGithubReplica = () => {
+    const nextReplica = clearGithubDocumentsReplicaFolders(githubReplicaRef.current)
+    githubReplicaRef.current = nextReplica
+    if (nextReplica) writeGithubDocumentsReplica(nextReplica)
+  }
+
+  const runGithubMutation = async (
+    payload: Record<string, unknown>,
+    successMessage: (body: GithubDocumentsMutationResponse) => string,
+  ): Promise<boolean> => {
+    if (githubMutating) return false
+
+    setGithubMutating(true)
+    setGithubMutationError(null)
+    setGithubUploadError(null)
+    setGithubUploadMessage(null)
+
+    try {
+      const response = await fetch('/api/github/documents', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      })
+      const body = await response.json().catch(() => ({})) as Partial<GithubDocumentsMutationResponse> & {
+        error?: unknown
+      }
+      if (!response.ok) {
+        throw new Error(
+          typeof body.error === 'string'
+            ? body.error
+            : `GitHub storage returned HTTP ${response.status}`,
+        )
+      }
+      if (!body.config || !body.action || typeof body.path !== 'string' || typeof body.parentPath !== 'string') {
+        throw new Error('GitHub storage returned an invalid mutation response.')
+      }
+
+      invalidateGithubReplica()
+      setGithubUploadMessage(successMessage(body as GithubDocumentsMutationResponse))
+      await loadGithubDocuments(githubPath)
+      return true
+    } catch (error) {
+      setGithubMutationError(error instanceof Error ? error.message : 'GitHub storage action failed.')
+      return false
+    } finally {
+      setGithubMutating(false)
+    }
+  }
+
+  const createGithubFolder = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = githubCreateFolderName.trim()
+    if (!name) {
+      setGithubMutationError('Enter a folder name.')
+      return
+    }
+
+    const success = await runGithubMutation(
+      {
+        action: 'create-folder',
+        path: githubPath,
+        name,
+      },
+      () => `Created folder ${name}`,
+    )
+    if (success) setGithubCreateFolderName('')
+  }
+
+  const saveGithubRename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!githubRenameState) return
+
+    const name = githubRenameState.name.trim()
+    if (!name) {
+      setGithubMutationError('Enter a name.')
+      return
+    }
+
+    const previousName = githubRenameState.entry.name
+    const success = await runGithubMutation(
+      {
+        action: 'rename',
+        path: githubPath,
+        entryPath: githubRenameState.entry.path,
+        entryType: githubRenameState.entry.type,
+        name,
+      },
+      () => `Renamed ${previousName} to ${name}`,
+    )
+    if (success) setGithubRenameState(null)
+  }
+
+  const deleteGithubEntry = async (prompt: GithubEntryDeletePrompt) => {
+    const success = await runGithubMutation(
+      {
+        action: 'delete',
+        path: prompt.parentPath,
+        entryPath: prompt.entry.path,
+        entryType: prompt.entry.type,
+      },
+      () => `Deleted ${prompt.entry.name}`,
+    )
+    if (success) setGithubDeletePrompt(null)
   }
 
   const saveDocumentTitle = async (document: DocumentSummary, title: string) => {
@@ -843,6 +979,10 @@ function AuthenticatedDashboard() {
             githubUploading={githubUploading}
             githubUploadError={githubUploadError}
             githubUploadMessage={githubUploadMessage}
+            githubCreateFolderName={githubCreateFolderName}
+            githubMutating={githubMutating}
+            githubMutationError={githubMutationError}
+            githubRenameState={githubRenameState}
             highlightColors={highlightColors.data}
             highlightColorsLoading={highlightColors.loading}
             highlightColorError={highlightColors.error ?? null}
@@ -862,9 +1002,18 @@ function AuthenticatedDashboard() {
             onSettingsToggle={() => setSettingsOpen((open) => !open)}
             onSignOut={() => void signOut()}
             onSubmitUrl={submitUrl}
+            onGithubCreateFolder={createGithubFolder}
+            onGithubCreateFolderNameChange={setGithubCreateFolderName}
+            onGithubDeleteEntry={(entry) => setGithubDeletePrompt({ entry, parentPath: githubPath })}
             onGithubEntryOpen={openGithubEntry}
-            onGithubPathChange={setGithubPath}
+            onGithubPathChange={navigateGithubPath}
             onGithubRefresh={refreshGithubDocuments}
+            onGithubRenameCancel={() => setGithubRenameState(null)}
+            onGithubRenameNameChange={(name) => {
+              setGithubRenameState((current) => current ? { ...current, name } : current)
+            }}
+            onGithubRenameStart={(entry) => setGithubRenameState({ entry, name: entry.name })}
+            onGithubRenameSubmit={saveGithubRename}
             onGithubUpload={uploadGithubPdf}
             onSaveHighlightColor={saveHighlightColor}
             onDeleteHighlightColor={deleteHighlightColor}
@@ -893,6 +1042,21 @@ function AuthenticatedDashboard() {
           onConfirm={() => deleteAnnotation(deleteAnnotationPrompt.document, deleteAnnotationPrompt.annotation)}
         />
       )}
+
+      {githubDeletePrompt && (
+        <ConfirmDialog
+          title={githubDeletePrompt.entry.type === 'dir' ? 'Delete folder' : 'Delete file'}
+          message={
+            githubDeletePrompt.entry.type === 'dir'
+              ? `Delete "${githubDeletePrompt.entry.name}" and everything inside it from GitHub? This action cannot be undone.`
+              : `Delete "${githubDeletePrompt.entry.name}" from GitHub? This action cannot be undone.`
+          }
+          confirmLabel="Delete"
+          busy={githubMutating}
+          onCancel={() => setGithubDeletePrompt(null)}
+          onConfirm={() => deleteGithubEntry(githubDeletePrompt)}
+        />
+      )}
     </div>
   )
 }
@@ -913,6 +1077,10 @@ function PdfLibrary({
   githubUploading,
   githubUploadError,
   githubUploadMessage,
+  githubCreateFolderName,
+  githubMutating,
+  githubMutationError,
+  githubRenameState,
   highlightColors,
   highlightColorsLoading,
   highlightColorError,
@@ -929,9 +1097,16 @@ function PdfLibrary({
   onSettingsToggle,
   onSignOut,
   onSubmitUrl,
+  onGithubCreateFolder,
+  onGithubCreateFolderNameChange,
+  onGithubDeleteEntry,
   onGithubEntryOpen,
   onGithubPathChange,
   onGithubRefresh,
+  onGithubRenameCancel,
+  onGithubRenameNameChange,
+  onGithubRenameStart,
+  onGithubRenameSubmit,
   onGithubUpload,
   onSaveHighlightColor,
   onDeleteHighlightColor,
@@ -951,6 +1126,10 @@ function PdfLibrary({
   githubUploading: boolean
   githubUploadError: string | null
   githubUploadMessage: string | null
+  githubCreateFolderName: string
+  githubMutating: boolean
+  githubMutationError: string | null
+  githubRenameState: GithubEntryRenameState | null
   highlightColors: readonly HighlightColor[]
   highlightColorsLoading: boolean
   highlightColorError: string | null
@@ -967,9 +1146,16 @@ function PdfLibrary({
   onSettingsToggle: () => void
   onSignOut: () => void
   onSubmitUrl: (event: FormEvent<HTMLFormElement>) => void
+  onGithubCreateFolder: (event: FormEvent<HTMLFormElement>) => void
+  onGithubCreateFolderNameChange: (value: string) => void
+  onGithubDeleteEntry: (entry: GithubDocumentEntry) => void
   onGithubEntryOpen: (entry: GithubDocumentEntry) => void
   onGithubPathChange: (path: string) => void
   onGithubRefresh: () => void
+  onGithubRenameCancel: () => void
+  onGithubRenameNameChange: (value: string) => void
+  onGithubRenameStart: (entry: GithubDocumentEntry) => void
+  onGithubRenameSubmit: (event: FormEvent<HTMLFormElement>) => void
   onGithubUpload: (event: ChangeEvent<HTMLInputElement>) => void
   onSaveHighlightColor: (input: HighlightColor, previousColor?: string) => Promise<void>
   onDeleteHighlightColor: (color: string) => Promise<void>
@@ -1074,9 +1260,20 @@ function PdfLibrary({
           uploading={githubUploading}
           uploadError={githubUploadError}
           uploadMessage={githubUploadMessage}
+          createFolderName={githubCreateFolderName}
+          mutating={githubMutating}
+          mutationError={githubMutationError}
+          renameState={githubRenameState}
+          onCreateFolder={onGithubCreateFolder}
+          onCreateFolderNameChange={onGithubCreateFolderNameChange}
+          onDeleteEntry={onGithubDeleteEntry}
           onEntryOpen={onGithubEntryOpen}
           onPathChange={onGithubPathChange}
           onRefresh={onGithubRefresh}
+          onRenameCancel={onGithubRenameCancel}
+          onRenameNameChange={onGithubRenameNameChange}
+          onRenameStart={onGithubRenameStart}
+          onRenameSubmit={onGithubRenameSubmit}
           onUpload={onGithubUpload}
         />
 
@@ -1158,9 +1355,20 @@ function GithubStoragePanel({
   uploading,
   uploadError,
   uploadMessage,
+  createFolderName,
+  mutating,
+  mutationError,
+  renameState,
+  onCreateFolder,
+  onCreateFolderNameChange,
+  onDeleteEntry,
   onEntryOpen,
   onPathChange,
   onRefresh,
+  onRenameCancel,
+  onRenameNameChange,
+  onRenameStart,
+  onRenameSubmit,
   onUpload,
 }: {
   config: GithubDocumentsConfig | null
@@ -1171,9 +1379,20 @@ function GithubStoragePanel({
   uploading: boolean
   uploadError: string | null
   uploadMessage: string | null
+  createFolderName: string
+  mutating: boolean
+  mutationError: string | null
+  renameState: GithubEntryRenameState | null
+  onCreateFolder: (event: FormEvent<HTMLFormElement>) => void
+  onCreateFolderNameChange: (value: string) => void
+  onDeleteEntry: (entry: GithubDocumentEntry) => void
   onEntryOpen: (entry: GithubDocumentEntry) => void
   onPathChange: (path: string) => void
   onRefresh: () => void
+  onRenameCancel: () => void
+  onRenameNameChange: (value: string) => void
+  onRenameStart: (entry: GithubDocumentEntry) => void
+  onRenameSubmit: (event: FormEvent<HTMLFormElement>) => void
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void
 }) {
   const visibleEntries = entries.filter((entry) => entry.type === 'dir' || entry.isPdf)
@@ -1201,14 +1420,14 @@ function GithubStoragePanel({
             label="Refresh GitHub files"
             title="Refresh"
             size="small"
-            disabled={loading}
+            disabled={loading || mutating}
             onClick={onRefresh}
           >
             <RefreshCw aria-hidden="true" />
           </IconButton>
           <label
-            className={`dashboard-github-upload${!canUpload || uploading ? ' is-disabled' : ''}`}
-            aria-disabled={!canUpload || uploading}
+            className={`dashboard-github-upload${!canUpload || uploading || mutating ? ' is-disabled' : ''}`}
+            aria-disabled={!canUpload || uploading || mutating}
             title={'Upload PDF'}
           >
             <Upload aria-hidden="true" />
@@ -1216,12 +1435,33 @@ function GithubStoragePanel({
             <input
               type="file"
               accept="application/pdf,.pdf"
-              disabled={!canUpload || uploading}
+              disabled={!canUpload || uploading || mutating}
               onChange={onUpload}
             />
           </label>
         </div>
       </div>
+
+      <form className="dashboard-github-create-folder" onSubmit={onCreateFolder}>
+        <Folder aria-hidden="true" />
+        <input
+          type="text"
+          value={createFolderName}
+          placeholder="New folder"
+          aria-label="New GitHub folder name"
+          disabled={!canUpload || mutating}
+          onChange={(event) => onCreateFolderNameChange(event.target.value)}
+        />
+        <IconButton
+          label="Create folder"
+          title="Create folder"
+          type="submit"
+          size="small"
+          disabled={!canUpload || mutating || !createFolderName.trim()}
+        >
+          <Plus aria-hidden="true" />
+        </IconButton>
+      </form>
 
       {/* <div className="dashboard-github-selectors" aria-label="GitHub repository">
         <label>
@@ -1253,11 +1493,15 @@ function GithubStoragePanel({
         ))}
       </nav>
 
-      {(error || uploadError || uploadMessage || !canUpload) && (
+      {(error || uploadError || mutationError || uploadMessage || !canUpload) && (
         <div className="dashboard-github-statuses">
           {error && <p className="dashboard-github-status is-error" role="alert">{error}</p>}
           {uploadError && <p className="dashboard-github-status is-error" role="alert">{uploadError}</p>}
+          {mutationError && <p className="dashboard-github-status is-error" role="alert">{mutationError}</p>}
           {uploadMessage && <p className="dashboard-github-status is-success">{uploadMessage}</p>}
+          {!canUpload && !uploadError && !mutationError && (
+            <p className="dashboard-github-status">Set GITHUB_DOCUMENTS_TOKEN to edit GitHub storage.</p>
+          )}
         </div>
       )}
 
@@ -1269,6 +1513,52 @@ function GithubStoragePanel({
         ) : (
           visibleEntries.map((entry) => {
             const pdfHref = entry.type === 'file' ? safeRemotePdfOpenHref(entry.cdnUrl) : null
+            const isRenaming = renameState?.entry.path === entry.path
+            if (isRenaming) {
+              return (
+                <form
+                  key={entry.path}
+                  className="dashboard-github-entry-edit"
+                  onSubmit={onRenameSubmit}
+                >
+                  <span className="dashboard-github-entry-icon" aria-hidden="true">
+                    {entry.type === 'dir' ? <Folder /> : <FileText />}
+                  </span>
+                  <input
+                    value={renameState.name}
+                    aria-label={`Rename ${entry.name}`}
+                    disabled={mutating}
+                    onChange={(event) => onRenameNameChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        onRenameCancel()
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <IconButton
+                    label={`Save name for ${entry.name}`}
+                    title="Save"
+                    type="submit"
+                    size="small"
+                    disabled={mutating || !renameState.name.trim()}
+                  >
+                    <Check aria-hidden="true" />
+                  </IconButton>
+                  <IconButton
+                    label={`Cancel rename for ${entry.name}`}
+                    title="Cancel"
+                    size="small"
+                    disabled={mutating}
+                    onClick={onRenameCancel}
+                  >
+                    <X aria-hidden="true" />
+                  </IconButton>
+                </form>
+              )
+            }
+
             const entryContent = (
               <>
                 <span className="dashboard-github-entry-icon" aria-hidden="true">
@@ -1284,28 +1574,47 @@ function GithubStoragePanel({
               </>
             )
 
-            if (pdfHref) {
-              return (
-                <a
-                  key={entry.path}
-                  className={`dashboard-github-entry is-${entry.type}`}
-                  href={pdfHref}
-                >
-                  {entryContent}
-                </a>
-              )
-            }
-
             return (
-              <button
-                key={entry.path}
-                type="button"
-                className={`dashboard-github-entry is-${entry.type}`}
-                disabled={entry.type === 'file'}
-                onClick={() => onEntryOpen(entry)}
-              >
-                {entryContent}
-              </button>
+              <div key={entry.path} className="dashboard-github-entry-row">
+                {pdfHref ? (
+                  <a
+                    className={`dashboard-github-entry is-${entry.type}`}
+                    href={pdfHref}
+                  >
+                    {entryContent}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className={`dashboard-github-entry is-${entry.type}`}
+                    disabled={entry.type === 'file'}
+                    onClick={() => onEntryOpen(entry)}
+                  >
+                    {entryContent}
+                  </button>
+                )}
+                <div className="dashboard-github-entry-actions">
+                  <IconButton
+                    label={`Rename ${entry.name}`}
+                    title="Rename"
+                    size="small"
+                    disabled={!canUpload || mutating}
+                    onClick={() => onRenameStart(entry)}
+                  >
+                    <Edit2 aria-hidden="true" />
+                  </IconButton>
+                  <IconButton
+                    label={`Delete ${entry.name}`}
+                    title="Delete"
+                    size="small"
+                    tone="danger"
+                    disabled={!canUpload || mutating}
+                    onClick={() => onDeleteEntry(entry)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </IconButton>
+                </div>
+              </div>
             )
           })
         )}

@@ -38,6 +38,14 @@ export type GithubDocumentsUploadResponse = {
   sha: string
 }
 
+export type GithubDocumentsMutationResponse = {
+  config: GithubDocumentsConfig
+  action: 'create-folder' | 'rename' | 'delete'
+  path: string
+  parentPath: string
+  commitSha: string
+}
+
 export function normalizeGithubPath(value: string): string {
   const trimmed = value.replace(/\\/g, '/').trim()
   if (trimmed === '' || trimmed === '/') return ''
