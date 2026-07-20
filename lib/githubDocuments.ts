@@ -113,8 +113,19 @@ export function githubBlobUrl({
 
 export function githubCdnUrl(blobUrl: string, cdnUrl = DEFAULT_GITHUB_DOCUMENTS_CDN_URL): string {
   const url = new URL(cdnUrl)
-  url.searchParams.set('file', blobUrl)
-  return url.toString()
+  return withRawGithubFileParam(url, blobUrl)
+}
+
+export function normalizeGithubCdnUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl)
+    const nestedFileUrl = url.searchParams.get('file')
+    if (!nestedFileUrl || !pathFromGithubBlobUrl(nestedFileUrl)) return null
+
+    return withRawGithubFileParam(url, nestedFileUrl)
+  } catch {
+    return null
+  }
 }
 
 export function fileNameFromGithubLikeUrl(rawUrl: string): string | null {
@@ -129,6 +140,32 @@ export function fileNameFromGithubLikeUrl(rawUrl: string): string | null {
     return decodeURIComponent(lastSegment)
   } catch {
     return null
+  }
+}
+
+function withRawGithubFileParam(url: URL, rawFileUrl: string): string {
+  const fileUrl = new URL(rawFileUrl)
+  fileUrl.hash = ''
+
+  const nextUrl = new URL(url)
+  nextUrl.hash = ''
+  const queryParts = nextUrl.search
+    .slice(1)
+    .split('&')
+    .filter(Boolean)
+    .filter((part) => queryKey(part) !== 'file')
+
+  queryParts.push(`file=${fileUrl.toString()}`)
+  nextUrl.search = queryParts.join('&')
+  return nextUrl.toString()
+}
+
+function queryKey(part: string): string {
+  const key = part.split('=', 1)[0]?.replace(/\+/g, ' ') ?? ''
+  try {
+    return decodeURIComponent(key)
+  } catch {
+    return key
   }
 }
 

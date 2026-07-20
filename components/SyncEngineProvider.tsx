@@ -51,6 +51,7 @@ function usePdfSyncEngineValue() {
     const body = (await response.json()) as Partial<SyncSession>
     return syncSessionForUserId(
       typeof body.userId === 'string' ? body.userId : undefined,
+      typeof body.username === 'string' ? body.username : null,
     )
   }, [])
 

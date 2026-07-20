@@ -6,7 +6,7 @@ export default defineNextSyncConfig({
     binding: 'DB',
   },
   schema: {
-    include: ['documents', 'annotations'],
+    include: ['documents', 'annotations', 'highlight_colors'],
   },
   client: {
     databaseName: 'pdf-annotation-db',

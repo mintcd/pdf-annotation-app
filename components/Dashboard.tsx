@@ -15,6 +15,7 @@ import {
   LogIn,
   LogOut,
   MessageSquare,
+  Plus,
   Search,
   Settings,
   Trash2,
@@ -59,6 +60,13 @@ import {
   type GithubDocumentsReplica,
 } from '../lib/githubDocumentsReplica'
 import { syncTimestamp, type PdfAnnotationRow, type PdfDocumentRow } from '../utils/pdfSync'
+import {
+  FALLBACK_HIGHLIGHT_COLOR,
+  SETTINGS_COLOR_GRID,
+  normalizeHexColor,
+  type HighlightColor,
+} from '../utils/highlightColors'
+import { useHighlightColors } from '../hooks/useHighlightColors'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 
 type DocumentSummary = PdfDocumentRow & {
@@ -141,6 +149,23 @@ function toAbsoluteHttpUrl(rawUrl: string): string | null {
     } catch {
       return null
     }
+  }
+}
+
+function remotePdfOpenHref(rawUrl: string, annotationId?: string): string {
+  const source = createRemotePdfSource(rawUrl)
+  const params = new URLSearchParams({ url: source.originalUrl })
+  if (annotationId) params.set('annotation', annotationId)
+  return `/?${params.toString()}`
+}
+
+function safeRemotePdfOpenHref(rawUrl: string | null): string | null {
+  if (!rawUrl) return null
+
+  try {
+    return remotePdfOpenHref(rawUrl)
+  } catch {
+    return null
   }
 }
 
@@ -373,6 +398,8 @@ function AuthenticatedDashboard() {
   const sync = usePdfSyncEngine()
   const documentsTable = useMemo(() => sync.db.table('documents'), [sync.db])
   const annotationsTable = useMemo(() => sync.db.table('annotations'), [sync.db])
+  const highlightColorsTable = useMemo(() => sync.db.table('highlight_colors'), [sync.db])
+  const highlightColors = useHighlightColors()
   const [newUrl, setNewUrl] = useState('')
   const [urlError, setUrlError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -543,10 +570,7 @@ function AuthenticatedDashboard() {
       const absoluteUrl = toAbsoluteHttpUrl(rawUrl)
       if (!absoluteUrl) throw new Error('Enter a valid PDF URL.')
 
-      const source = createRemotePdfSource(absoluteUrl)
-      const params = new URLSearchParams({ url: source.originalUrl })
-      if (annotationId) params.set('annotation', annotationId)
-      window.location.assign(`/?${params.toString()}`)
+      window.location.assign(remotePdfOpenHref(absoluteUrl, annotationId))
     } catch (error) {
       setUrlError(error instanceof Error ? error.message : 'Enter a valid PDF URL.')
     }
@@ -564,11 +588,6 @@ function AuthenticatedDashboard() {
       setGithubUploadMessage(null)
       setGithubPath(entry.path)
       return
-    }
-
-    if (entry.cdnUrl) {
-      setUrlError('')
-      openUrl(entry.cdnUrl)
     }
   }
 
@@ -700,6 +719,33 @@ function AuthenticatedDashboard() {
     }
   }
 
+  const saveHighlightColor = async (input: HighlightColor, previousColor?: string) => {
+    const color = normalizeHexColor(input.color)
+    const semantics = input.semantics.trim()
+    const previous = previousColor ? normalizeHexColor(previousColor) : null
+
+    if (!color) throw new Error('Enter a valid hex color.')
+    if (!semantics) throw new Error('Enter color semantics.')
+
+    await highlightColorsTable.put({ color, semantics })
+    if (previous && previous !== color) {
+      await highlightColorsTable.delete({ color: previous })
+    }
+    flushSync('updated highlight color')
+  }
+
+  const deleteHighlightColor = async (color: string) => {
+    if (highlightColors.data.length <= 1) {
+      throw new Error('Keep at least one highlight color.')
+    }
+
+    const normalized = normalizeHexColor(color)
+    if (!normalized) return
+
+    await highlightColorsTable.delete({ color: normalized })
+    flushSync('deleted highlight color')
+  }
+
   async function signOut() {
     if (signingOut) return
 
@@ -797,10 +843,13 @@ function AuthenticatedDashboard() {
             githubUploading={githubUploading}
             githubUploadError={githubUploadError}
             githubUploadMessage={githubUploadMessage}
+            highlightColors={highlightColors.data}
+            highlightColorsLoading={highlightColors.loading}
+            highlightColorError={highlightColors.error ?? null}
             searchRef={searchRef}
             settingsOpen={settingsOpen}
             syncInfo={syncInfo}
-            accountLabel={sync.session.userId}
+            accountLabel={sync.session.username ?? 'Account'}
             signingOut={signingOut}
             signOutError={signOutError}
             onCloseSettings={() => setSettingsOpen(false)}
@@ -817,6 +866,8 @@ function AuthenticatedDashboard() {
             onGithubPathChange={setGithubPath}
             onGithubRefresh={refreshGithubDocuments}
             onGithubUpload={uploadGithubPdf}
+            onSaveHighlightColor={saveHighlightColor}
+            onDeleteHighlightColor={deleteHighlightColor}
           />
         )}
       </main>
@@ -862,6 +913,9 @@ function PdfLibrary({
   githubUploading,
   githubUploadError,
   githubUploadMessage,
+  highlightColors,
+  highlightColorsLoading,
+  highlightColorError,
   searchRef,
   settingsOpen,
   syncInfo,
@@ -879,6 +933,8 @@ function PdfLibrary({
   onGithubPathChange,
   onGithubRefresh,
   onGithubUpload,
+  onSaveHighlightColor,
+  onDeleteHighlightColor,
 }: {
   documents: DocumentSummary[]
   totalAnnotations: number
@@ -895,6 +951,9 @@ function PdfLibrary({
   githubUploading: boolean
   githubUploadError: string | null
   githubUploadMessage: string | null
+  highlightColors: readonly HighlightColor[]
+  highlightColorsLoading: boolean
+  highlightColorError: string | null
   searchRef: RefObject<HTMLInputElement | null>
   settingsOpen: boolean
   syncInfo: { label: string; tone: BadgeTone }
@@ -912,6 +971,8 @@ function PdfLibrary({
   onGithubPathChange: (path: string) => void
   onGithubRefresh: () => void
   onGithubUpload: (event: ChangeEvent<HTMLInputElement>) => void
+  onSaveHighlightColor: (input: HighlightColor, previousColor?: string) => Promise<void>
+  onDeleteHighlightColor: (color: string) => Promise<void>
 }) {
   const groups = useMemo(() => groupDocumentsBySource(documents), [documents])
   const hasDocuments = documents.length > 0
@@ -950,8 +1011,13 @@ function PdfLibrary({
                   signOutError={signOutError}
                   signingOut={signingOut}
                   syncInfo={syncInfo}
+                  highlightColors={highlightColors}
+                  highlightColorsLoading={highlightColorsLoading}
+                  highlightColorError={highlightColorError}
                   onClose={onCloseSettings}
                   onSignOut={onSignOut}
+                  onSaveHighlightColor={onSaveHighlightColor}
+                  onDeleteHighlightColor={onDeleteHighlightColor}
                 />
               )}
             </div>
@@ -1201,26 +1267,47 @@ function GithubStoragePanel({
         ) : visibleEntries.length === 0 ? (
           <div className="dashboard-github-empty">No PDF files here</div>
         ) : (
-          visibleEntries.map((entry) => (
-            <button
-              key={entry.path}
-              type="button"
-              className={`dashboard-github-entry is-${entry.type}`}
-              disabled={entry.type === 'file' && !entry.cdnUrl}
-              onClick={() => onEntryOpen(entry)}
-            >
-              <span className="dashboard-github-entry-icon" aria-hidden="true">
-                {entry.type === 'dir' ? <Folder /> : <FileText />}
-              </span>
-              <span className="dashboard-github-entry-main">
-                <strong title={entry.path}>{entry.name}</strong>
-                <small>
-                  {entry.type === 'dir' ? 'Folder' : formatFileSize(entry.size)}
-                </small>
-              </span>
-              {entry.type === 'file' && <ExternalLink aria-hidden="true" />}
-            </button>
-          ))
+          visibleEntries.map((entry) => {
+            const pdfHref = entry.type === 'file' ? safeRemotePdfOpenHref(entry.cdnUrl) : null
+            const entryContent = (
+              <>
+                <span className="dashboard-github-entry-icon" aria-hidden="true">
+                  {entry.type === 'dir' ? <Folder /> : <FileText />}
+                </span>
+                <span className="dashboard-github-entry-main">
+                  <strong title={entry.path}>{entry.name}</strong>
+                  <small>
+                    {entry.type === 'dir' ? 'Folder' : formatFileSize(entry.size)}
+                  </small>
+                </span>
+                {entry.type === 'file' && <ExternalLink aria-hidden="true" />}
+              </>
+            )
+
+            if (pdfHref) {
+              return (
+                <a
+                  key={entry.path}
+                  className={`dashboard-github-entry is-${entry.type}`}
+                  href={pdfHref}
+                >
+                  {entryContent}
+                </a>
+              )
+            }
+
+            return (
+              <button
+                key={entry.path}
+                type="button"
+                className={`dashboard-github-entry is-${entry.type}`}
+                disabled={entry.type === 'file'}
+                onClick={() => onEntryOpen(entry)}
+              >
+                {entryContent}
+              </button>
+            )
+          })
         )}
       </div>
     </section>
@@ -1260,16 +1347,36 @@ function DashboardSettingsWindow({
   signOutError,
   signingOut,
   syncInfo,
+  highlightColors,
+  highlightColorsLoading,
+  highlightColorError,
   onClose,
   onSignOut,
+  onSaveHighlightColor,
+  onDeleteHighlightColor,
 }: {
   accountLabel: string
   signOutError: string | null
   signingOut: boolean
   syncInfo: { label: string; tone: BadgeTone }
+  highlightColors: readonly HighlightColor[]
+  highlightColorsLoading: boolean
+  highlightColorError: string | null
   onClose: () => void
   onSignOut: () => void
+  onSaveHighlightColor: (input: HighlightColor, previousColor?: string) => Promise<void>
+  onDeleteHighlightColor: (color: string) => Promise<void>
 }) {
+  const [draftColor, setDraftColor] = useState(FALLBACK_HIGHLIGHT_COLOR)
+  const [draftSemantics, setDraftSemantics] = useState('')
+  const [editingColor, setEditingColor] = useState<string | null>(null)
+  const [busyColor, setBusyColor] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const normalizedDraftColor = normalizeHexColor(draftColor)
+  const previewColor = normalizedDraftColor ?? FALLBACK_HIGHLIGHT_COLOR
+  const isEditing = editingColor !== null
+  const deleteDisabled = highlightColors.length <= 1 || busyColor !== null
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -1277,6 +1384,69 @@ function DashboardSettingsWindow({
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [onClose])
+
+  const resetDraft = () => {
+    setDraftColor(FALLBACK_HIGHLIGHT_COLOR)
+    setDraftSemantics('')
+    setEditingColor(null)
+    setFormError(null)
+  }
+
+  const editColor = (color: HighlightColor) => {
+    setDraftColor(color.color)
+    setDraftSemantics(color.semantics)
+    setEditingColor(color.color)
+    setFormError(null)
+  }
+
+  const submitColor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    const color = normalizeHexColor(draftColor)
+    const semantics = draftSemantics.trim()
+    if (!color) {
+      setFormError('Enter a valid hex color.')
+      return
+    }
+    if (!semantics) {
+      setFormError('Enter color semantics.')
+      return
+    }
+    if (
+      highlightColors.some((item) =>
+        item.color === color && item.color !== editingColor,
+      )
+    ) {
+      setFormError('That color already exists.')
+      return
+    }
+
+    setBusyColor(editingColor ?? color)
+    setFormError(null)
+    try {
+      await onSaveHighlightColor({ color, semantics }, editingColor ?? undefined)
+      resetDraft()
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to save color.')
+    } finally {
+      setBusyColor(null)
+    }
+  }
+
+  const deleteColor = async (color: string) => {
+    if (deleteDisabled) return
+
+    setBusyColor(color)
+    setFormError(null)
+    try {
+      await onDeleteHighlightColor(color)
+      if (editingColor === color) resetDraft()
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to delete color.')
+    } finally {
+      setBusyColor(null)
+    }
+  }
 
   return (
     <>
@@ -1334,6 +1504,140 @@ function DashboardSettingsWindow({
               {signOutError}
             </p>
           )}
+        </section>
+
+        <section className="dashboard-settings-colors" aria-labelledby="dashboard-settings-colors-title">
+          <div className="dashboard-settings-section-heading">
+            <h3 id="dashboard-settings-colors-title">Highlight colors</h3>
+            <span>{highlightColors.length}</span>
+          </div>
+
+          <div className="dashboard-settings-color-list" aria-busy={highlightColorsLoading}>
+            {highlightColorsLoading ? (
+              <p className="dashboard-settings-muted">Loading colors...</p>
+            ) : highlightColors.length === 0 ? (
+              <p className="dashboard-settings-muted">No colors saved.</p>
+            ) : (
+              highlightColors.map((color) => (
+                <div key={color.color} className="dashboard-settings-color-row">
+                  <span
+                    className="dashboard-settings-color-swatch"
+                    style={{ '--highlight-color': color.color } as CSSProperties}
+                    aria-hidden="true"
+                  />
+                  <span className="dashboard-settings-color-copy">
+                    <span className="dashboard-settings-color-name">{color.semantics}</span>
+                    <span className="dashboard-settings-color-hex">{color.color}</span>
+                  </span>
+                  <IconButton
+                    className="dashboard-settings-row-action"
+                    label={`Edit ${color.semantics}`}
+                    title="Edit"
+                    size="small"
+                    disabled={busyColor !== null}
+                    onClick={() => editColor(color)}
+                  >
+                    <Edit2 aria-hidden="true" />
+                  </IconButton>
+                  <IconButton
+                    className="dashboard-settings-row-action"
+                    label={`Delete ${color.semantics}`}
+                    title={highlightColors.length <= 1 ? 'Keep at least one color' : 'Delete'}
+                    size="small"
+                    disabled={deleteDisabled}
+                    onClick={() => void deleteColor(color.color)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </IconButton>
+                </div>
+              ))
+            )}
+          </div>
+
+          <form className="dashboard-settings-color-form" onSubmit={(event) => void submitColor(event)}>
+            <div className="dashboard-settings-picker-grid" role="grid" aria-label="Color choices">
+              {SETTINGS_COLOR_GRID.map((color) => {
+                const selected = normalizedDraftColor === color
+                return (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`dashboard-settings-picker-swatch${selected ? ' is-selected' : ''}`}
+                    style={{ '--highlight-color': color } as CSSProperties}
+                    aria-label={`Choose ${color}`}
+                    aria-pressed={selected}
+                    onClick={() => setDraftColor(color)}
+                  >
+                    {selected && <Check aria-hidden="true" />}
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="dashboard-settings-color-fields">
+              <label className="dashboard-settings-field dashboard-settings-color-field">
+                <span>Color</span>
+                <span className="dashboard-settings-hex-row">
+                  <input
+                    type="color"
+                    className="dashboard-settings-native-color"
+                    value={previewColor}
+                    aria-label="Pick highlight color"
+                    onChange={(event) => setDraftColor(event.target.value)}
+                  />
+                  <input
+                    className="dashboard-input dashboard-settings-hex-input"
+                    value={draftColor}
+                    placeholder="#87ceeb"
+                    spellCheck={false}
+                    aria-invalid={normalizedDraftColor === null}
+                    onBlur={() => {
+                      if (normalizedDraftColor) setDraftColor(normalizedDraftColor)
+                    }}
+                    onChange={(event) => setDraftColor(event.target.value)}
+                  />
+                </span>
+              </label>
+
+              <label className="dashboard-settings-field">
+                <span>Semantics</span>
+                <input
+                  className="dashboard-input dashboard-settings-text-input"
+                  value={draftSemantics}
+                  placeholder="Reference"
+                  onChange={(event) => setDraftSemantics(event.target.value)}
+                />
+              </label>
+            </div>
+
+            {(formError || highlightColorError) && (
+              <p className="dashboard-settings-error" role="alert">
+                {formError || highlightColorError}
+              </p>
+            )}
+
+            <div className="dashboard-settings-actions">
+              {isEditing && (
+                <Button
+                  variant="secondary"
+                  size="small"
+                  disabled={busyColor !== null}
+                  leadingIcon={<X aria-hidden="true" />}
+                  onClick={resetDraft}
+                >
+                  Cancel
+                </Button>
+              )}
+              <Button
+                type="submit"
+                size="small"
+                loading={busyColor !== null}
+                leadingIcon={isEditing ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}
+              >
+                {isEditing ? 'Save color' : 'Add color'}
+              </Button>
+            </div>
+          </form>
         </section>
       </div>
     </>

@@ -6,13 +6,17 @@ import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
 import { Panel, PanelBody, PanelFooter, PanelHeader } from './design-system/panel'
 import { AnnotationNoteEditor } from './AnnotationNoteEditor'
-import { HIGHLIGHT_COLORS } from './SelectionPanel'
+import {
+  INITIAL_HIGHLIGHT_COLORS,
+  type HighlightColor,
+} from '../utils/highlightColors'
 import type { PdfAnnotationRow } from '../utils/pdfSync'
 import { normalizePdfPosition } from '../utils/pdfSync'
 
 type AnnotationSidebarProps = {
   annotations: PdfAnnotationRow[]
   documentId: string
+  highlightColors: readonly HighlightColor[]
   onClose: () => void
   onColorChange: (annotation: PdfAnnotationRow, color: string) => Promise<void>
   onCommentChange: (annotation: PdfAnnotationRow, comment: string) => Promise<void>
@@ -24,6 +28,7 @@ type AnnotationSidebarProps = {
 export default function AnnotationSidebar({
   annotations,
   documentId,
+  highlightColors,
   onClose,
   onColorChange,
   onCommentChange,
@@ -33,6 +38,7 @@ export default function AnnotationSidebar({
 }: AnnotationSidebarProps) {
   const { provides: scroll } = useScroll(documentId)
   const [draftComments, setDraftComments] = useState<Record<string, string>>({})
+  const colorOptions = highlightColors.length > 0 ? highlightColors : INITIAL_HIGHLIGHT_COLORS
 
   const sortedAnnotations = useMemo(() => {
     return [...annotations].sort((left, right) => {
@@ -96,19 +102,22 @@ export default function AnnotationSidebar({
                   {selected && (
                     <div className="annotation-editor">
                       <div className="color-swatches" role="radiogroup" aria-label="Annotation color">
-                        {HIGHLIGHT_COLORS.map((option) => (
-                          <button
-                            key={option.value}
-                            className="color-swatch"
-                            type="button"
-                            role="radio"
-                            aria-checked={annotation.color === option.value}
-                            aria-label={`${option.name} highlight`}
-                            title={option.name}
-                            style={{ '--swatch-color': option.value } as CSSProperties}
-                            onClick={() => void onColorChange(annotation, option.value)}
-                          />
-                        ))}
+                        {colorOptions.map((option) => {
+                          const semantics = option.semantics.trim() || option.color
+                          return (
+                            <button
+                              key={option.color}
+                              className="color-swatch"
+                              type="button"
+                              role="radio"
+                              aria-checked={annotation.color === option.color}
+                              aria-label={`${semantics} highlight (${option.color})`}
+                              title={`${semantics} (${option.color})`}
+                              style={{ '--swatch-color': option.color } as CSSProperties}
+                              onClick={() => void onColorChange(annotation, option.color)}
+                            />
+                          )
+                        })}
                       </div>
 
                       <AnnotationNoteEditor

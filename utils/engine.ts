@@ -119,9 +119,26 @@ export const finalConfig = defineGeneratedNextSyncConfig({
             "generated": false
           }
         }
+      },
+      "highlight_colors": {
+        "primaryKey": [
+          "color"
+        ],
+        "columns": {
+          "color": {
+            "affinity": "text",
+            "nullable": false,
+            "generated": false
+          },
+          "semantics": {
+            "affinity": "text",
+            "nullable": false,
+            "generated": false
+          }
+        }
       }
     },
-    "schemaHash": "sha256:a6dde84d8af2a55e36b4d2d2a3cdc1365719567cde2e77906917ba10acb09670"
+    "schemaHash": "sha256:1799d7c17a4cb7fc14fd612aabdfadaef7e4b4685aa09496e4feb7c9bbaf0890"
   }
 } as const);
 

@@ -20,7 +20,7 @@ export async function POST(request: Request): Promise<Response> {
       throw new AuthRequestError('Invalid username or password', 401)
     }
 
-    return sessionResponse(syncSessionForUserId(user.id))
+    return sessionResponse(syncSessionForUserId(user.id, user.username))
   } catch (error) {
     return errorResponse(error)
   }

@@ -3,18 +3,17 @@ import { Highlighter } from 'lucide-react'
 import { type CSSProperties, useState } from 'react'
 import { Button } from './design-system/button'
 import { Toolbar, ToolbarGroup, ToolbarSeparator } from './design-system/toolbar'
+import {
+  INITIAL_HIGHLIGHT_COLORS,
+  highlightColorSemantics,
+  type HighlightColor,
+} from '../utils/highlightColors'
 import type { PdfSelectionGeometry } from '../utils/pdfSync'
-
-export const HIGHLIGHT_COLORS = [
-  { name: 'Yellow', value: '#ffcd45' },
-  { name: 'Blue', value: '#87ceeb' },
-  { name: 'Green', value: '#90d8a4' },
-  { name: 'Rose', value: '#ff8f9c' },
-] as const
 
 type SelectionPanelProps = {
   color: string;
   documentId: string;
+  highlightColors: readonly HighlightColor[];
   onCreateHighlight: (payload: {
     color: string;
     geometry: PdfSelectionGeometry[];
@@ -26,12 +25,15 @@ type SelectionPanelProps = {
 export default function SelectionPanel({
   color,
   documentId,
+  highlightColors,
   onCreateHighlight,
   onColorChange,
 }: SelectionPanelProps) {
   const { provides: selectionCapability } = useSelectionCapability()
   const [isCreating, setIsCreating] = useState(false)
   const [error, setError] = useState('')
+  const colorOptions = highlightColors.length > 0 ? highlightColors : INITIAL_HIGHLIGHT_COLORS
+  const selectedSemantics = highlightColorSemantics(colorOptions, color)
 
   const createHighlight = () => {
     if (!selectionCapability || isCreating) return
@@ -72,23 +74,27 @@ export default function SelectionPanel({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <ToolbarGroup className="color-swatches" role="radiogroup" aria-label="Highlight color">
-        {HIGHLIGHT_COLORS.map((option) => (
-          <button
-            key={option.value}
-            className="color-swatch"
-            type="button"
-            role="radio"
-            aria-checked={color === option.value}
-            aria-label={`${option.name} highlight`}
-            title={option.name}
-            style={{ '--swatch-color': option.value } as CSSProperties}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={() => onColorChange(option.value)}
-          />
-        ))}
+        {colorOptions.map((option) => {
+          const semantics = option.semantics.trim() || option.color
+          return (
+            <button
+              key={option.color}
+              className="color-swatch"
+              type="button"
+              role="radio"
+              aria-checked={color === option.color}
+              aria-label={`${semantics} highlight (${option.color})`}
+              title={`${semantics} (${option.color})`}
+              style={{ '--swatch-color': option.color } as CSSProperties}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => onColorChange(option.color)}
+            />
+          )
+        })}
       </ToolbarGroup>
       <ToolbarSeparator />
       <Button
+        className="selection-highlight-action"
         variant="primary"
         size="small"
         loading={isCreating}
@@ -96,7 +102,7 @@ export default function SelectionPanel({
         onPointerDown={(event) => event.preventDefault()}
         onClick={createHighlight}
       >
-        Highlight
+        Highlight {selectedSemantics}
       </Button>
       {error && <span className="selection-error" role="alert">{error}</span>}
     </Toolbar>

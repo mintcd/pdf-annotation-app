@@ -30,7 +30,7 @@ export async function POST(request: Request): Promise<Response> {
       throw error
     }
 
-    return sessionResponse(syncSessionForUserId(userId), { status: 201 })
+    return sessionResponse(syncSessionForUserId(userId, credentials.username), { status: 201 })
   } catch (error) {
     return errorResponse(error)
   }

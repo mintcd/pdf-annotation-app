@@ -27,6 +27,21 @@ CREATE INDEX IF NOT EXISTS annotations_by_document ON annotations (document_id);
 CREATE INDEX IF NOT EXISTS annotations_by_document_page ON annotations (document_id, page_index);
 CREATE INDEX IF NOT EXISTS annotations_by_updated_at ON annotations (updated_at);
 
+CREATE TABLE IF NOT EXISTS highlight_colors (
+  color TEXT PRIMARY KEY
+    CHECK (
+      length(color) = 7
+      AND substr(color, 1, 1) = '#'
+    ),
+  semantics TEXT NOT NULL CHECK (length(trim(semantics)) > 0)
+);
+
+INSERT OR IGNORE INTO highlight_colors (color, semantics) VALUES
+  ('#87ceeb', 'Reference'),
+  ('#90ee90', 'Confirmed'),
+  ('#ff6b6b', 'Concern'),
+  ('#d3d3d3', 'Follow-up');
+
 CREATE TABLE IF NOT EXISTS operations (
   id TEXT PRIMARY KEY,
   entity TEXT NOT NULL,
@@ -127,7 +142,7 @@ INSERT OR IGNORE INTO sync_engine_v2_streams (
 )
 VALUES (
   'user:aaa027c73a2451552ef56351fdcbdd73dc9f6b417f8fdb75e4561807fe6cab40',
-  'sha256:a6dde84d8af2a55e36b4d2d2a3cdc1365719567cde2e77906917ba10acb09670',
+  'sha256:1799d7c17a4cb7fc14fd612aabdfadaef7e4b4685aa09496e4feb7c9bbaf0890',
   0,
-  '{"schemaHash":"sha256:a6dde84d8af2a55e36b4d2d2a3cdc1365719567cde2e77906917ba10acb09670","tables":{"annotations":{},"documents":{}}}'
+  '{"schemaHash":"sha256:1799d7c17a4cb7fc14fd612aabdfadaef7e4b4685aa09496e4feb7c9bbaf0890","tables":{"annotations":{},"documents":{},"highlight_colors":{}}}'
 );

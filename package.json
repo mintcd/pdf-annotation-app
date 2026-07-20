@@ -4,8 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "db:local:migrate": "wrangler d1 execute pdf_annotation --local --file ./migrations/0001_pdf_annotation_sync.sql",
-    "db:remote:migrate": "wrangler d1 execute pdf_annotation --remote --file ./migrations/0001_pdf_annotation_sync.sql",
+    "db:local:migrate": "wrangler d1 execute pdf_annotation --local --file ./migrations/0001_pdf_annotation_sync.sql && wrangler d1 execute pdf_annotation --local --file ./migrations/0002_highlight_colors.sql",
+    "db:remote:migrate": "wrangler d1 execute pdf_annotation --remote --file ./migrations/0001_pdf_annotation_sync.sql && wrangler d1 execute pdf_annotation --remote --file ./migrations/0002_highlight_colors.sql",
     "predev": "npm run typecheck",
     "prebuild": "npm run typecheck",
     "dev": "vinext dev --port 3000",

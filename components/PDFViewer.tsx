@@ -41,9 +41,11 @@ import {
   type PdfDocumentRow,
   type PdfSelectionGeometry,
 } from '../utils/pdfSync'
+import { FALLBACK_HIGHLIGHT_COLOR } from '../utils/highlightColors'
+import { useHighlightColors } from '../hooks/useHighlightColors'
 import AnnotationSidebar from './AnnotationSidebar'
 import DocumentOutlineSidebar from './DocumentOutlineSidebar'
-import SelectionPanel, { HIGHLIGHT_COLORS } from './SelectionPanel'
+import SelectionPanel from './SelectionPanel'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 import ViewerToolbar, { type PersistenceStatus } from './ViewerToolbar'
 
@@ -174,9 +176,10 @@ function SyncedPdfWorkspace({
   const annotationsTable = useMemo(() => sync.db.table('annotations'), [sync.db])
   const documents = sync.tables.documents as readonly PdfDocumentRow[]
   const liveAnnotations = sync.tables.annotations as readonly PdfAnnotationRow[]
+  const highlightColors = useHighlightColors()
   const [documentRow, setDocumentRow] = useState<PdfDocumentRow | null>(null)
   const [documentError, setDocumentError] = useState('')
-  const [highlightColor, setHighlightColor] = useState<string>(HIGHLIGHT_COLORS[0].value)
+  const [highlightColor, setHighlightColor] = useState<string>(FALLBACK_HIGHLIGHT_COLOR)
   const [panelOpen, setPanelOpen] = useState(true)
   const [panelMode, setPanelMode] = useState<'outline' | 'annotations'>('annotations')
   const localWriteIds = useRef(new Set<string>())
@@ -193,6 +196,15 @@ function SyncedPdfWorkspace({
   useEffect(() => {
     zoomRef.current = zoom
   }, [zoom])
+
+  useEffect(() => {
+    if (
+      highlightColors.data.length > 0
+      && !highlightColors.data.some((option) => option.color === highlightColor)
+    ) {
+      setHighlightColor(highlightColors.data[0]?.color ?? FALLBACK_HIGHLIGHT_COLOR)
+    }
+  }, [highlightColor, highlightColors.data])
 
   useEffect(() => {
     const frame = pdfViewportFrameRef.current
@@ -644,7 +656,7 @@ function SyncedPdfWorkspace({
         if (!current) return
 
         const nextPageIndex = event.pageIndex
-        const nextColor = annotation.strokeColor ?? annotation.color ?? HIGHLIGHT_COLORS[0].value
+        const nextColor = annotation.strokeColor ?? annotation.color ?? FALLBACK_HIGHLIGHT_COLOR
         const nextComment = annotation.contents?.trim() || null
         const nextPosition = serializePdfPosition(positionFromAnnotation(annotation))
         if (annotationRowHasPluginState(current, {
@@ -863,6 +875,7 @@ function SyncedPdfWorkspace({
                         <SelectionPanel
                           color={highlightColor}
                           documentId={documentId}
+                          highlightColors={highlightColors.data}
                           onColorChange={setHighlightColor}
                           onCreateHighlight={createHighlight}
                         />
@@ -891,6 +904,7 @@ function SyncedPdfWorkspace({
             <AnnotationSidebar
               annotations={annotationRows}
               documentId={documentId}
+              highlightColors={highlightColors.data}
               onClose={closePanel}
               onColorChange={changeAnnotationColor}
               onCommentChange={changeAnnotationComment}
