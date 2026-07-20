@@ -259,6 +259,12 @@ button:disabled {
   flex: 1;
 }
 
+.jump-navigation-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .toolbar-separator,
 .toolbar-divider {
   width: 1px;

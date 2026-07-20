@@ -29,9 +29,13 @@ export type PersistenceStatus = 'loading' | 'synced' | 'syncing' | 'queued' | 'e
 type ViewerToolbarProps = {
   annotationCount: number;
   annotationsOpen: boolean;
+  canJumpBack: boolean;
+  canJumpForward: boolean;
   documentId: string;
   onChromeToggle?: () => void;
   onAnnotationsToggle: () => void;
+  onJumpBack: () => void;
+  onJumpForward: () => void;
   onOutlineToggle: () => void;
   outlineOpen: boolean;
   persistenceStatus: PersistenceStatus;
@@ -40,9 +44,13 @@ type ViewerToolbarProps = {
 export default function ViewerToolbar({
   annotationCount,
   annotationsOpen,
+  canJumpBack,
+  canJumpForward,
   documentId,
   onChromeToggle,
   onAnnotationsToggle,
+  onJumpBack,
+  onJumpForward,
   onOutlineToggle,
   outlineOpen,
   persistenceStatus,
@@ -102,16 +110,28 @@ export default function ViewerToolbar({
   return (
     <Toolbar className="viewer-toolbar" aria-label="PDF controls">
       <ToolbarGroup className="toolbar-group page-controls">
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Previous page"
-          title="Previous page"
-          disabled={!scroll || scrollState.currentPage <= 1}
-          onClick={() => scroll?.scrollToPreviousPage('smooth')}
-        >
-          <ChevronLeft size={18} aria-hidden="true" />
-        </button>
+        <div className="jump-navigation-controls" role="group" aria-label="Jump navigation">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Back to previous link or table of contents location"
+            title="Back"
+            disabled={!canJumpBack}
+            onClick={onJumpBack}
+          >
+            <ChevronLeft size={18} aria-hidden="true" />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Forward to next link or table of contents location"
+            title="Forward"
+            disabled={!canJumpForward}
+            onClick={onJumpForward}
+          >
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        </div>
         <label className="page-control">
           <span className="sr-only">Page number</span>
           <input
@@ -127,16 +147,6 @@ export default function ViewerToolbar({
           />
           <span>of {Math.max(scrollState.totalPages, 1)}</span>
         </label>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Next page"
-          title="Next page"
-          disabled={!scroll || scrollState.currentPage >= scrollState.totalPages}
-          onClick={() => scroll?.scrollToNextPage('smooth')}
-        >
-          <ChevronRight size={18} aria-hidden="true" />
-        </button>
       </ToolbarGroup>
 
       {onChromeToggle && (

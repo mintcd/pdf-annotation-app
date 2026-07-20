@@ -3,7 +3,12 @@
 import { createPluginRegistration } from '@embedpdf/core'
 import { EmbedPDF } from '@embedpdf/core/react'
 import { usePdfiumEngine } from '@embedpdf/engines/react'
-import type { PdfHighlightAnnoObject, PdfAnnotationObject } from '@embedpdf/models'
+import {
+  PdfActionType,
+  type PdfAnnotationObject,
+  type PdfHighlightAnnoObject,
+  type PdfLinkTarget,
+} from '@embedpdf/models'
 import {
   AnnotationLayer,
   AnnotationPluginPackage,
@@ -82,6 +87,11 @@ type PdfRenderWindow = {
   visiblePageIndexes: ReadonlySet<number>
 }
 
+type PageJumpHistory = {
+  entries: number[]
+  index: number
+}
+
 type CreateHighlight = (input: {
   color: string
   geometry: PdfSelectionGeometry[]
@@ -97,6 +107,7 @@ const PDF_SCROLL_BUFFER_PAGES = 2
 const PDF_BITMAP_LOOKAHEAD_PAGES = 1
 const PDF_INTERACTION_LOOKAHEAD_PAGES = 1
 const PDF_LINK_CATEGORY = 'pdf-link'
+const MAX_PAGE_JUMP_HISTORY = 50
 
 export default function PDFViewer({
   chromeVisible = true,
@@ -201,7 +212,7 @@ function SyncedPdfWorkspace({
   source: PdfSource
 }) {
   const { provides: annotationScope, state: annotationState } = useAnnotation(documentId)
-  const { provides: scroll } = useScroll(documentId)
+  const { provides: scroll, state: scrollState } = useScroll(documentId)
   const { provides: zoom } = useZoom(documentId)
   const renderWindow = usePdfRenderWindow(documentId)
   const sync = usePdfSyncEngine()
@@ -221,6 +232,11 @@ function SyncedPdfWorkspace({
   const syncFlushRef = useRef(sync.sync)
   const zoomRef = useRef(zoom)
   const touchZoomBaselineRef = useRef<number | null>(null)
+  const currentPageRef = useRef(1)
+  const [pageJumpHistory, setPageJumpHistory] = useState<PageJumpHistory>({
+    entries: [],
+    index: -1,
+  })
 
   useEffect(() => {
     syncFlushRef.current = sync.sync
@@ -229,6 +245,52 @@ function SyncedPdfWorkspace({
   useEffect(() => {
     zoomRef.current = zoom
   }, [zoom])
+
+  useEffect(() => {
+    currentPageRef.current = Math.max(scrollState.currentPage || 1, 1)
+  }, [scrollState.currentPage])
+
+  useEffect(() => {
+    currentPageRef.current = 1
+    setPageJumpHistory({ entries: [], index: -1 })
+  }, [documentId])
+
+  const recordPageJump = useCallback((targetPageNumber: number) => {
+    const fromPage = Math.max(currentPageRef.current || 1, 1)
+    if (!Number.isFinite(targetPageNumber)) return
+
+    const toPage = Math.max(Math.trunc(targetPageNumber), 1)
+    if (fromPage === toPage) return
+
+    setPageJumpHistory((current) => addPageJumpHistoryEntry(current, fromPage, toPage))
+  }, [])
+
+  const navigatePageJumpHistory = useCallback((direction: 'back' | 'forward') => {
+    if (!scroll) return
+
+    let targetPageNumber: number | null = null
+
+    setPageJumpHistory((current) => {
+      const nextIndex = direction === 'back' ? current.index - 1 : current.index + 1
+      const nextPage = current.entries[nextIndex]
+
+      if (!Number.isInteger(nextPage)) return current
+      targetPageNumber = nextPage
+
+      return {
+        ...current,
+        index: nextIndex,
+      }
+    })
+
+    if (!targetPageNumber) return
+    currentPageRef.current = targetPageNumber
+    scroll.scrollToPage({
+      pageNumber: targetPageNumber,
+      behavior: 'smooth',
+      alignY: 0,
+    })
+  }, [scroll])
 
   useEffect(() => {
     if (
@@ -574,6 +636,15 @@ function SyncedPdfWorkspace({
   ])
 
   useEffect(() => {
+    if (!annotationScope) return
+
+    return annotationScope.onNavigate((event) => {
+      const targetPageNumber = pageNumberFromLinkTarget(event.target)
+      if (targetPageNumber) recordPageJump(targetPageNumber)
+    })
+  }, [annotationScope, recordPageJump])
+
+  useEffect(() => {
     if (!annotationScope || !documentRow) return
     const rowsById = new Map(annotationRows.map((row) => [row.id, row]))
 
@@ -759,7 +830,14 @@ function SyncedPdfWorkspace({
         <ViewerToolbar
           annotationCount={annotationRows.length}
           annotationsOpen={panelOpen && panelMode === 'annotations'}
+          canJumpBack={pageJumpHistory.index > 0}
+          canJumpForward={
+            pageJumpHistory.index >= 0
+            && pageJumpHistory.index < pageJumpHistory.entries.length - 1
+          }
           documentId={documentId}
+          onJumpBack={() => navigatePageJumpHistory('back')}
+          onJumpForward={() => navigatePageJumpHistory('forward')}
           onChromeToggle={onChromeToggle}
           onAnnotationsToggle={() => togglePanel('annotations')}
           onOutlineToggle={() => togglePanel('outline')}
@@ -824,7 +902,11 @@ function SyncedPdfWorkspace({
             onClick={closePanel}
           />
           {panelMode === 'outline' ? (
-            <DocumentOutlineSidebar documentId={documentId} onClose={closePanel} />
+            <DocumentOutlineSidebar
+              documentId={documentId}
+              onClose={closePanel}
+              onPageJump={recordPageJump}
+            />
           ) : (
             <AnnotationSidebar
               annotations={annotationRows}
@@ -922,6 +1004,42 @@ function IncrementalPdfPage({
       )}
     </PagePointerProvider>
   )
+}
+
+function addPageJumpHistoryEntry(
+  current: PageJumpHistory,
+  fromPage: number,
+  toPage: number,
+): PageJumpHistory {
+  const activeEntries = current.index >= 0
+    ? current.entries.slice(0, current.index + 1)
+    : []
+
+  const nextEntries = [...activeEntries]
+  if (nextEntries[nextEntries.length - 1] !== fromPage) {
+    nextEntries.push(fromPage)
+  }
+  if (nextEntries[nextEntries.length - 1] !== toPage) {
+    nextEntries.push(toPage)
+  }
+
+  const boundedEntries = nextEntries.slice(-MAX_PAGE_JUMP_HISTORY)
+
+  return {
+    entries: boundedEntries,
+    index: boundedEntries.length - 1,
+  }
+}
+
+function pageNumberFromLinkTarget(target: PdfLinkTarget): number | null {
+  const pageIndex = target.type === 'destination'
+    ? target.destination.pageIndex
+    : target.action.type === PdfActionType.Goto || target.action.type === PdfActionType.RemoteGoto
+      ? target.action.destination.pageIndex
+      : null
+
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) return null
+  return pageIndex + 1
 }
 
 function usePdfRenderWindow(documentId: string): PdfRenderWindow {

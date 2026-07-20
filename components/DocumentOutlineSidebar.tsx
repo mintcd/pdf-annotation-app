@@ -28,6 +28,7 @@ import { Panel, PanelBody, PanelFooter, PanelHeader } from './design-system/pane
 type DocumentOutlineSidebarProps = {
   documentId: string
   onClose: () => void
+  onPageJump?: (pageNumber: number) => void
 }
 
 type OutlineStatus = 'loading' | 'ready' | 'error'
@@ -47,6 +48,7 @@ type OutlineDraft = {
 export default function DocumentOutlineSidebar({
   documentId,
   onClose,
+  onPageJump,
 }: DocumentOutlineSidebarProps) {
   const { provides: bookmarkCapability } = useBookmarkCapability()
   const { registry, documents } = useRegistry()
@@ -196,8 +198,12 @@ export default function DocumentOutlineSidebar({
       return
     }
 
-    scroll?.scrollToPage({
-      pageNumber: target.pageIndex + 1,
+    if (!scroll) return
+
+    const pageNumber = target.pageIndex + 1
+    onPageJump?.(pageNumber)
+    scroll.scrollToPage({
+      pageNumber,
       behavior: 'instant',
       alignY: 0,
     })
