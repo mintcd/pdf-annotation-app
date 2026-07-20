@@ -68,12 +68,9 @@ type ActiveTouchGesture = {
   isLongPress: boolean
   longPressTimer: number | null
   pointerId: number | null
-  startScrollLeft: number
-  startScrollTop: number
   startX: number
   startY: number
   target: EventTarget | null
-  viewport: HTMLElement
 }
 
 type ZoomScopeRef = { current: ReturnType<typeof useZoom>['provides'] }
@@ -262,19 +259,15 @@ function SyncedPdfWorkspace({
     ) => {
       if (isInteractiveTouchTarget(target)) return
 
-      const viewport = findPdfViewport(frame)
       resetTouchGesture()
       activeTouchGesture = {
         hasMoved: false,
         isLongPress: false,
         longPressTimer: null,
         pointerId,
-        startScrollLeft: viewport.scrollLeft,
-        startScrollTop: viewport.scrollTop,
         startX: clientX,
         startY: clientY,
         target,
-        viewport,
       }
 
       activeTouchGesture.longPressTimer = window.setTimeout(() => {
@@ -299,16 +292,6 @@ function SyncedPdfWorkspace({
       const deltaX = clientX - activeTouchGesture.startX
       const deltaY = clientY - activeTouchGesture.startY
       const distance = Math.hypot(deltaX, deltaY)
-      const shouldPan = activeTouchGesture.hasMoved || distance >= TOUCH_PAN_THRESHOLD_PX
-
-      if (!shouldPan) {
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
-      }
-
-      activeTouchGesture.viewport.scrollLeft = activeTouchGesture.startScrollLeft - deltaX
-      activeTouchGesture.viewport.scrollTop = activeTouchGesture.startScrollTop - deltaY
 
       if (distance >= TOUCH_PAN_THRESHOLD_PX) {
         activeTouchGesture.hasMoved = true
@@ -334,7 +317,7 @@ function SyncedPdfWorkspace({
           && Math.hypot(clientX - lastTapX, clientY - lastTapY) <= TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX
 
         if (isDoublePress) {
-          stopTouchSelectionEvent(event)
+          stopTouchSelectionEvent(event, { preventDefault: true })
           lastTapAt = 0
           suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
           requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
@@ -346,7 +329,6 @@ function SyncedPdfWorkspace({
       }
 
       if (wasPan || wasLongPress) {
-        stopTouchSelectionEvent(event)
         suppressMouseUntil = performance.now() + TOUCH_MOUSE_SUPPRESSION_MS
         lastTapAt = 0
       }
@@ -361,6 +343,7 @@ function SyncedPdfWorkspace({
       if (!isPrimaryTouchPointer(event) || activeTouchPointers.size >= 2) {
         resetTouchGesture()
         lastTapAt = 0
+        stopTouchSelectionEvent(event)
         return
       }
 
@@ -368,6 +351,13 @@ function SyncedPdfWorkspace({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (!isTouchPointer(event)) return
+
+      if (activeTouchPointers.size >= 2) {
+        stopTouchSelectionEvent(event)
+        return
+      }
+
       if (
         !isPrimaryTouchPointer(event)
         || activeTouchPointers.size !== 1
@@ -1051,10 +1041,6 @@ function isInteractiveTouchTarget(target: EventTarget | null): boolean {
   ].join(',')))
 }
 
-function findPdfViewport(frame: HTMLElement): HTMLElement {
-  return frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
-}
-
 function isTouchPointer(event: PointerEvent): boolean {
   return event.pointerType === 'touch'
 }
@@ -1063,8 +1049,11 @@ function isPrimaryTouchPointer(event: PointerEvent): boolean {
   return isTouchPointer(event) && event.isPrimary !== false
 }
 
-function stopTouchSelectionEvent(event: Event) {
-  if (event.cancelable) event.preventDefault()
+function stopTouchSelectionEvent(
+  event: Event,
+  options: { preventDefault?: boolean } = {},
+) {
+  if (options.preventDefault && event.cancelable) event.preventDefault()
   event.stopPropagation()
   event.stopImmediatePropagation()
 }
