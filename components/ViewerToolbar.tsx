@@ -85,7 +85,7 @@ export default function ViewerToolbar({
       Math.max(Number.parseInt(pageDraft, 10) || 1, 1),
       Math.max(scrollState.totalPages, 1),
     )
-    scroll.scrollToPage({ pageNumber, behavior: 'smooth' })
+    scroll.scrollToPage({ pageNumber, behavior: 'instant' })
     setPageDraft(String(pageNumber))
   }
 

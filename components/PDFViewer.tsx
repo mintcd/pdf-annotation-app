@@ -287,7 +287,7 @@ function SyncedPdfWorkspace({
     currentPageRef.current = targetPageNumber
     scroll.scrollToPage({
       pageNumber: targetPageNumber,
-      behavior: 'smooth',
+      behavior: 'instant',
       alignY: 0,
     })
   }, [scroll])
