@@ -20,13 +20,19 @@ import {
   Trash2,
   User,
   UserPlus,
+  Folder,
+  RefreshCw,
+  Upload,
   X,
 } from 'lucide-react'
+import { FaGithub } from 'react-icons/fa'
 import {
+  type ChangeEvent,
   type CSSProperties,
   type FormEvent,
   type RefObject,
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -38,6 +44,13 @@ import { IconButton } from './design-system/icon-button'
 import { TextField } from './design-system/text-field'
 import { AnnotationNoteEditor } from './AnnotationNoteEditor'
 import { createRemotePdfSource } from '../lib/pdfSource'
+import {
+  pathFromGithubBlobUrl,
+  type GithubDocumentEntry,
+  type GithubDocumentsConfig,
+  type GithubDocumentsListResponse,
+  type GithubDocumentsUploadResponse,
+} from '../lib/githubDocuments'
 import { syncTimestamp, type PdfAnnotationRow, type PdfDocumentRow } from '../utils/pdfSync'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 
@@ -128,6 +141,11 @@ function documentLocation(document: PdfDocumentRow): { host: string; path: strin
   const url = documentUrl(document)
   if (!url) return { host: 'Local PDFs', path: document.file_name }
 
+  const githubPath = pathFromGithubBlobUrl(url)
+  if (githubPath) {
+    return { host: 'mintcd/documents', path: githubPath }
+  }
+
   try {
     const parsed = new URL(url)
     return {
@@ -148,13 +166,19 @@ function groupDocumentsBySource(documents: DocumentSummary[]): DocumentGroup[] {
     let label = 'Local PDFs'
 
     if (url) {
-      try {
-        const parsed = new URL(url)
-        key = parsed.origin
-        label = parsed.hostname.replace(/^www\./, '')
-      } catch {
-        key = 'remote'
-        label = 'Remote PDFs'
+      const githubPath = pathFromGithubBlobUrl(url)
+      if (githubPath) {
+        key = 'github:mintcd/documents'
+        label = 'mintcd/documents'
+      } else {
+        try {
+          const parsed = new URL(url)
+          key = parsed.origin
+          label = parsed.hostname.replace(/^www\./, '')
+        } catch {
+          key = 'remote'
+          label = 'Remote PDFs'
+        }
       }
     }
 
@@ -360,6 +384,14 @@ function AuthenticatedDashboard() {
   } | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
+  const [githubConfig, setGithubConfig] = useState<GithubDocumentsConfig | null>(null)
+  const [githubEntries, setGithubEntries] = useState<GithubDocumentEntry[]>([])
+  const [githubPath, setGithubPath] = useState('')
+  const [githubLoading, setGithubLoading] = useState(false)
+  const [githubError, setGithubError] = useState<string | null>(null)
+  const [githubUploading, setGithubUploading] = useState(false)
+  const [githubUploadError, setGithubUploadError] = useState<string | null>(null)
+  const [githubUploadMessage, setGithubUploadMessage] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
 
   const flushSync = (label: string) => {
@@ -367,6 +399,40 @@ function AuthenticatedDashboard() {
       console.error(`Failed to flush ${label}`, error)
     })
   }
+
+  const loadGithubDocuments = useCallback(async (path: string) => {
+    setGithubLoading(true)
+    setGithubError(null)
+
+    try {
+      const params = new URLSearchParams()
+      if (path) params.set('path', path)
+      const response = await fetch(`/api/github/documents${params.toString() ? `?${params}` : ''}`, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      })
+      const body = await response.json().catch(() => ({})) as Partial<GithubDocumentsListResponse> & {
+        error?: unknown
+      }
+      if (!response.ok) {
+        throw new Error(
+          typeof body.error === 'string'
+            ? body.error
+            : `GitHub storage returned HTTP ${response.status}`,
+        )
+      }
+
+      if (body.config) setGithubConfig(body.config)
+      setGithubEntries(Array.isArray(body.entries) ? body.entries : [])
+      if (typeof body.path === 'string') setGithubPath(body.path)
+    } catch (error) {
+      setGithubEntries([])
+      setGithubError(error instanceof Error ? error.message : 'GitHub storage is unavailable.')
+    } finally {
+      setGithubLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -379,6 +445,10 @@ function AuthenticatedDashboard() {
     window.addEventListener('keydown', focusSearch)
     return () => window.removeEventListener('keydown', focusSearch)
   }, [])
+
+  useEffect(() => {
+    void loadGithubDocuments(githubPath)
+  }, [githubPath, loadGithubDocuments])
 
   const documents = useMemo<DocumentSummary[]>(() => {
     const annotationRows = sync.tables.annotations as readonly PdfAnnotationRow[]
@@ -448,6 +518,72 @@ function AuthenticatedDashboard() {
     event.preventDefault()
     setUrlError('')
     openUrl(newUrl)
+  }
+
+  const openGithubEntry = (entry: GithubDocumentEntry) => {
+    if (entry.type === 'dir') {
+      setGithubUploadError(null)
+      setGithubUploadMessage(null)
+      setGithubPath(entry.path)
+      return
+    }
+
+    if (entry.cdnUrl) {
+      setUrlError('')
+      openUrl(entry.cdnUrl)
+    }
+  }
+
+  const refreshGithubDocuments = () => {
+    void loadGithubDocuments(githubPath)
+  }
+
+  const uploadGithubPdf = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    event.target.value = ''
+    if (!file || githubUploading) return
+
+    setGithubUploadError(null)
+    setGithubUploadMessage(null)
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setGithubUploadError('Choose a PDF file.')
+      return
+    }
+
+    setGithubUploading(true)
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('path', githubPath)
+
+      const response = await fetch('/api/github/documents', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+        body: formData,
+      })
+      const body = await response.json().catch(() => ({})) as Partial<GithubDocumentsUploadResponse> & {
+        error?: unknown
+      }
+      if (!response.ok) {
+        throw new Error(
+          typeof body.error === 'string'
+            ? body.error
+            : `GitHub upload returned HTTP ${response.status}`,
+        )
+      }
+      if (!body.cdnUrl || !body.name) {
+        throw new Error('GitHub upload did not return a PDF URL.')
+      }
+
+      setGithubUploadMessage(`Uploaded ${body.name}`)
+      await loadGithubDocuments(githubPath)
+      openUrl(body.cdnUrl)
+    } catch (error) {
+      setGithubUploadError(error instanceof Error ? error.message : 'GitHub upload failed.')
+    } finally {
+      setGithubUploading(false)
+    }
   }
 
   const saveDocumentTitle = async (document: DocumentSummary, title: string) => {
@@ -615,6 +751,14 @@ function AuthenticatedDashboard() {
             loading={!sync.ready}
             newUrl={newUrl}
             urlError={urlError}
+            githubConfig={githubConfig}
+            githubEntries={githubEntries}
+            githubError={githubError}
+            githubLoading={githubLoading}
+            githubPath={githubPath}
+            githubUploading={githubUploading}
+            githubUploadError={githubUploadError}
+            githubUploadMessage={githubUploadMessage}
             searchRef={searchRef}
             settingsOpen={settingsOpen}
             syncInfo={syncInfo}
@@ -631,6 +775,10 @@ function AuthenticatedDashboard() {
             onSettingsToggle={() => setSettingsOpen((open) => !open)}
             onSignOut={() => void signOut()}
             onSubmitUrl={submitUrl}
+            onGithubEntryOpen={openGithubEntry}
+            onGithubPathChange={setGithubPath}
+            onGithubRefresh={refreshGithubDocuments}
+            onGithubUpload={uploadGithubPdf}
           />
         )}
       </main>
@@ -668,6 +816,14 @@ function PdfLibrary({
   loading,
   newUrl,
   urlError,
+  githubConfig,
+  githubEntries,
+  githubError,
+  githubLoading,
+  githubPath,
+  githubUploading,
+  githubUploadError,
+  githubUploadMessage,
   searchRef,
   settingsOpen,
   syncInfo,
@@ -681,6 +837,10 @@ function PdfLibrary({
   onSettingsToggle,
   onSignOut,
   onSubmitUrl,
+  onGithubEntryOpen,
+  onGithubPathChange,
+  onGithubRefresh,
+  onGithubUpload,
 }: {
   documents: DocumentSummary[]
   totalAnnotations: number
@@ -689,6 +849,14 @@ function PdfLibrary({
   loading: boolean
   newUrl: string
   urlError: string
+  githubConfig: GithubDocumentsConfig | null
+  githubEntries: GithubDocumentEntry[]
+  githubError: string | null
+  githubLoading: boolean
+  githubPath: string
+  githubUploading: boolean
+  githubUploadError: string | null
+  githubUploadMessage: string | null
   searchRef: RefObject<HTMLInputElement | null>
   settingsOpen: boolean
   syncInfo: { label: string; tone: BadgeTone }
@@ -702,6 +870,10 @@ function PdfLibrary({
   onSettingsToggle: () => void
   onSignOut: () => void
   onSubmitUrl: (event: FormEvent<HTMLFormElement>) => void
+  onGithubEntryOpen: (entry: GithubDocumentEntry) => void
+  onGithubPathChange: (path: string) => void
+  onGithubRefresh: () => void
+  onGithubUpload: (event: ChangeEvent<HTMLInputElement>) => void
 }) {
   const groups = useMemo(() => groupDocumentsBySource(documents), [documents])
   const hasDocuments = documents.length > 0
@@ -789,6 +961,21 @@ function PdfLibrary({
           </div>
         </header>
 
+        <GithubStoragePanel
+          config={githubConfig}
+          entries={githubEntries}
+          error={githubError}
+          loading={githubLoading}
+          path={githubPath}
+          uploading={githubUploading}
+          uploadError={githubUploadError}
+          uploadMessage={githubUploadMessage}
+          onEntryOpen={onGithubEntryOpen}
+          onPathChange={onGithubPathChange}
+          onRefresh={onGithubRefresh}
+          onUpload={onGithubUpload}
+        />
+
         {!hasDocuments ? (
           <LibraryEmptyState searchQuery={searchQuery} loading={loading} />
         ) : (
@@ -856,6 +1043,178 @@ function PdfLibrary({
       </div>
     </section>
   )
+}
+
+function GithubStoragePanel({
+  config,
+  entries,
+  error,
+  loading,
+  path,
+  uploading,
+  uploadError,
+  uploadMessage,
+  onEntryOpen,
+  onPathChange,
+  onRefresh,
+  onUpload,
+}: {
+  config: GithubDocumentsConfig | null
+  entries: GithubDocumentEntry[]
+  error: string | null
+  loading: boolean
+  path: string
+  uploading: boolean
+  uploadError: string | null
+  uploadMessage: string | null
+  onEntryOpen: (entry: GithubDocumentEntry) => void
+  onPathChange: (path: string) => void
+  onRefresh: () => void
+  onUpload: (event: ChangeEvent<HTMLInputElement>) => void
+}) {
+  const visibleEntries = entries.filter((entry) => entry.type === 'dir' || entry.isPdf)
+  const breadcrumbs = githubBreadcrumbs(path, config?.repo ?? 'documents')
+  const canUpload = Boolean(config?.canUpload)
+  const owner = config?.owner ?? 'mintcd'
+  const repo = config?.repo ?? 'documents'
+  const branch = config?.branch ?? 'main'
+
+  return (
+    <section className="dashboard-github-storage" aria-labelledby="dashboard-github-title">
+      <div className="dashboard-github-header">
+        <div className="dashboard-github-heading">
+          <span className="dashboard-github-mark" aria-hidden="true">
+            <FaGithub />
+          </span>
+          <div>
+            <h2 id="dashboard-github-title">GitHub storage</h2>
+            <p>{owner}/{repo} · {branch}</p>
+          </div>
+        </div>
+
+        <div className="dashboard-github-actions">
+          <IconButton
+            label="Refresh GitHub files"
+            title="Refresh"
+            size="small"
+            disabled={loading}
+            onClick={onRefresh}
+          >
+            <RefreshCw aria-hidden="true" />
+          </IconButton>
+          <label
+            className={`dashboard-github-upload${!canUpload || uploading ? ' is-disabled' : ''}`}
+            aria-disabled={!canUpload || uploading}
+            title={'Upload PDF'}
+          >
+            <Upload aria-hidden="true" />
+            <span>{uploading ? 'Uploading' : 'Upload PDF'}</span>
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={!canUpload || uploading}
+              onChange={onUpload}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="dashboard-github-selectors" aria-label="GitHub repository">
+        <label>
+          <span>Account</span>
+          <select value={owner} disabled>
+            <option value={owner}>{owner}</option>
+          </select>
+        </label>
+        <label>
+          <span>Repository</span>
+          <select value={repo} disabled>
+            <option value={repo}>{repo}</option>
+          </select>
+        </label>
+      </div>
+
+      <nav className="dashboard-github-breadcrumbs" aria-label="GitHub folder">
+        {breadcrumbs.map((crumb, index) => (
+          <button
+            key={crumb.path || 'root'}
+            type="button"
+            className={index === breadcrumbs.length - 1 ? 'is-current' : ''}
+            disabled={index === breadcrumbs.length - 1}
+            onClick={() => onPathChange(crumb.path)}
+          >
+            {index === 0 ? <Folder aria-hidden="true" /> : null}
+            <span>{crumb.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {(error || uploadError || uploadMessage || !canUpload) && (
+        <div className="dashboard-github-statuses">
+          {error && <p className="dashboard-github-status is-error" role="alert">{error}</p>}
+          {uploadError && <p className="dashboard-github-status is-error" role="alert">{uploadError}</p>}
+          {uploadMessage && <p className="dashboard-github-status is-success">{uploadMessage}</p>}
+        </div>
+      )}
+
+      <div className="dashboard-github-list" aria-busy={loading}>
+        {loading && visibleEntries.length === 0 ? (
+          <div className="dashboard-github-empty">Loading GitHub files...</div>
+        ) : visibleEntries.length === 0 ? (
+          <div className="dashboard-github-empty">No PDF files here</div>
+        ) : (
+          visibleEntries.map((entry) => (
+            <button
+              key={entry.sha}
+              type="button"
+              className={`dashboard-github-entry is-${entry.type}`}
+              disabled={entry.type === 'file' && !entry.cdnUrl}
+              onClick={() => onEntryOpen(entry)}
+            >
+              <span className="dashboard-github-entry-icon" aria-hidden="true">
+                {entry.type === 'dir' ? <Folder /> : <FileText />}
+              </span>
+              <span className="dashboard-github-entry-main">
+                <strong title={entry.path}>{entry.name}</strong>
+                <small>
+                  {entry.type === 'dir' ? 'Folder' : formatFileSize(entry.size)}
+                </small>
+              </span>
+              {entry.type === 'file' && <ExternalLink aria-hidden="true" />}
+            </button>
+          ))
+        )}
+      </div>
+    </section>
+  )
+}
+
+function githubBreadcrumbs(path: string, rootLabel: string): { label: string; path: string }[] {
+  const parts = path.split('/').filter(Boolean)
+  const crumbs = [{ label: rootLabel, path: '' }]
+  let current = ''
+
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part
+    crumbs.push({ label: part, path: current })
+  }
+
+  return crumbs
+}
+
+function formatFileSize(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'PDF'
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB']
+  let size = value / 1024
+  let unitIndex = 0
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+
+  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unitIndex]}`
 }
 
 function DashboardSettingsWindow({
