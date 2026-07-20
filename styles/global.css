@@ -686,17 +686,70 @@ button:disabled {
   padding: 0 10px 10px 34px;
 }
 
-.annotation-editor textarea {
+.annotation-note-editor {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  color: inherit;
+  line-height: 1.45;
+}
+
+.annotation-note-editor > span:not(.annotation-note-placeholder) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.annotation-note-editor [contenteditable="true"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  outline: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.annotation-note-editor.is-preview {
+  cursor: text;
+}
+
+.annotation-note-preview-text {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.annotation-note-placeholder {
+  position: absolute;
+  top: var(--annotation-note-pad-y, 0);
+  right: var(--annotation-note-pad-x, 0);
+  left: var(--annotation-note-pad-x, 0);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.annotation-note-editor.is-editing[data-empty="true"] .annotation-note-placeholder {
+  opacity: 0.72;
+}
+
+.annotation-note-editor.is-disabled {
+  opacity: 0.72;
+}
+
+.annotation-editor .annotation-note-editor {
+  --annotation-note-pad-x: 9px;
+  --annotation-note-pad-y: 9px;
   width: 100%;
   min-height: 82px;
-  resize: vertical;
   padding: 9px;
   border: 1px solid var(--border);
   border-radius: 12px;
   outline: 0;
+  background: #fff;
 }
 
-.annotation-editor textarea:focus {
+.annotation-editor .annotation-note-editor:focus-within {
   border-color: #93c5fd;
   box-shadow: 0 0 0 3px #dbeafe;
 }
@@ -2136,10 +2189,11 @@ body,
   margin-top: var(--ds-space-3);
 }
 
-.dashboard-comment-edit-form textarea {
+.dashboard-comment-edit-form .annotation-note-editor {
+  --annotation-note-pad-x: var(--ds-space-3);
+  --annotation-note-pad-y: var(--ds-space-3);
   width: 100%;
   min-height: 6rem;
-  resize: vertical;
   padding: var(--ds-space-3);
   border: 1px solid var(--ds-color-border);
   border-radius: var(--ds-radius-md);
@@ -2148,7 +2202,7 @@ body,
   background: #fafafe;
 }
 
-.dashboard-comment-edit-form textarea:focus {
+.dashboard-comment-edit-form .annotation-note-editor:focus-within {
   border-color: rgba(37, 99, 235, 0.52);
   background: white;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);

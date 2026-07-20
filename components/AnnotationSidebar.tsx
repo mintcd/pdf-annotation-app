@@ -5,6 +5,7 @@ import { Badge } from './design-system/badge'
 import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
 import { Panel, PanelBody, PanelFooter, PanelHeader } from './design-system/panel'
+import { AnnotationNoteEditor } from './AnnotationNoteEditor'
 import { HIGHLIGHT_COLORS } from './SelectionPanel'
 import type { PdfAnnotationRow } from '../utils/pdfSync'
 import { normalizePdfPosition } from '../utils/pdfSync'
@@ -110,20 +111,17 @@ export default function AnnotationSidebar({
                         ))}
                       </div>
 
-                      <label>
-                        <span className="sr-only">Comment</span>
-                        <textarea
-                          value={commentValue}
-                          placeholder="Add a note"
-                          onBlur={() => void onCommentChange(annotation, commentValue)}
-                          onChange={(event) => {
-                            setDraftComments((current) => ({
-                              ...current,
-                              [annotation.id]: event.target.value,
-                            }))
-                          }}
-                        />
-                      </label>
+                      <AnnotationNoteEditor
+                        value={commentValue}
+                        label={`Note for page ${annotation.page_index + 1}`}
+                        onBlur={(nextComment) => void onCommentChange(annotation, nextComment)}
+                        onChange={(nextComment) => {
+                          setDraftComments((current) => ({
+                            ...current,
+                            [annotation.id]: nextComment,
+                          }))
+                        }}
+                      />
 
                       <Button
                         variant="danger"

@@ -36,6 +36,7 @@ import { Button } from './design-system/button'
 import { Card } from './design-system/card'
 import { IconButton } from './design-system/icon-button'
 import { TextField } from './design-system/text-field'
+import { AnnotationNoteEditor } from './AnnotationNoteEditor'
 import { createRemotePdfSource } from '../lib/pdfSource'
 import { syncTimestamp, type PdfAnnotationRow, type PdfDocumentRow } from '../utils/pdfSync'
 import { usePdfSyncEngine } from './SyncEngineProvider'
@@ -1189,18 +1190,14 @@ function AnnotationDetailCard({
             onSaveComment()
           }}
         >
-          <textarea
+          <AnnotationNoteEditor
             value={editingComment.comment}
+            label={`Note for page ${annotation.page_index + 1}`}
             placeholder="Add a note"
-            onChange={(event) => onUpdateDraftComment(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                onCancelCommentEdit()
-              }
-            }}
             disabled={saving}
             autoFocus
+            onChange={onUpdateDraftComment}
+            onEscape={onCancelCommentEdit}
           />
           <div className="dashboard-comment-actions">
             <Button
@@ -1224,7 +1221,14 @@ function AnnotationDetailCard({
           </div>
         </form>
       ) : annotation.comment ? (
-        <p className="dashboard-annotation-comment">{annotation.comment}</p>
+        <AnnotationNoteEditor
+          className="dashboard-annotation-comment"
+          value={annotation.comment}
+          editing={false}
+          label={`Note for page ${annotation.page_index + 1}`}
+          onChange={() => undefined}
+          onStartEditing={onStartCommentEdit}
+        />
       ) : null}
 
       <div className="dashboard-annotation-actions">
