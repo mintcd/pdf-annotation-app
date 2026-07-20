@@ -51,6 +51,13 @@ import {
   type GithubDocumentsListResponse,
   type GithubDocumentsUploadResponse,
 } from '../lib/githubDocuments'
+import {
+  folderSnapshotFromGithubReplica,
+  mergeGithubDocumentsFetch,
+  readGithubDocumentsReplica,
+  writeGithubDocumentsReplica,
+  type GithubDocumentsReplica,
+} from '../lib/githubDocumentsReplica'
 import { syncTimestamp, type PdfAnnotationRow, type PdfDocumentRow } from '../utils/pdfSync'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 
@@ -392,6 +399,7 @@ function AuthenticatedDashboard() {
   const [githubUploading, setGithubUploading] = useState(false)
   const [githubUploadError, setGithubUploadError] = useState<string | null>(null)
   const [githubUploadMessage, setGithubUploadMessage] = useState<string | null>(null)
+  const githubReplicaRef = useRef<GithubDocumentsReplica | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
 
   const flushSync = (label: string) => {
@@ -401,6 +409,15 @@ function AuthenticatedDashboard() {
   }
 
   const loadGithubDocuments = useCallback(async (path: string) => {
+    const cached = folderSnapshotFromGithubReplica(githubReplicaRef.current, path)
+    const cachedConfig = githubReplicaRef.current?.config ?? null
+    if (cachedConfig) setGithubConfig(cachedConfig)
+    if (cached) {
+      setGithubEntries(cached.entries)
+    } else {
+      setGithubEntries([])
+    }
+
     setGithubLoading(true)
     setGithubError(null)
 
@@ -423,11 +440,23 @@ function AuthenticatedDashboard() {
         )
       }
 
-      if (body.config) setGithubConfig(body.config)
-      setGithubEntries(Array.isArray(body.entries) ? body.entries : [])
-      if (typeof body.path === 'string') setGithubPath(body.path)
+      if (!body.config || typeof body.path !== 'string' || !Array.isArray(body.entries)) {
+        throw new Error('GitHub storage returned an invalid folder snapshot.')
+      }
+
+      const snapshot: GithubDocumentsListResponse = {
+        config: body.config,
+        path: body.path,
+        entries: body.entries,
+      }
+      const nextReplica = mergeGithubDocumentsFetch(githubReplicaRef.current, snapshot)
+      githubReplicaRef.current = nextReplica
+      writeGithubDocumentsReplica(nextReplica)
+
+      setGithubConfig(snapshot.config)
+      setGithubEntries(snapshot.entries)
+      setGithubPath(snapshot.path)
     } catch (error) {
-      setGithubEntries([])
       setGithubError(error instanceof Error ? error.message : 'GitHub storage is unavailable.')
     } finally {
       setGithubLoading(false)
@@ -444,6 +473,15 @@ function AuthenticatedDashboard() {
     }
     window.addEventListener('keydown', focusSearch)
     return () => window.removeEventListener('keydown', focusSearch)
+  }, [])
+
+  useEffect(() => {
+    const replica = readGithubDocumentsReplica()
+    githubReplicaRef.current = replica
+    const cachedConfig = replica?.config ?? null
+    const cached = folderSnapshotFromGithubReplica(replica, githubPath)
+    if (cachedConfig) setGithubConfig(cachedConfig)
+    if (cached) setGithubEntries(cached.entries)
   }, [])
 
   useEffect(() => {
@@ -1119,7 +1157,7 @@ function GithubStoragePanel({
         </div>
       </div>
 
-      <div className="dashboard-github-selectors" aria-label="GitHub repository">
+      {/* <div className="dashboard-github-selectors" aria-label="GitHub repository">
         <label>
           <span>Account</span>
           <select value={owner} disabled>
@@ -1132,7 +1170,7 @@ function GithubStoragePanel({
             <option value={repo}>{repo}</option>
           </select>
         </label>
-      </div>
+      </div> */}
 
       <nav className="dashboard-github-breadcrumbs" aria-label="GitHub folder">
         {breadcrumbs.map((crumb, index) => (
@@ -1165,7 +1203,7 @@ function GithubStoragePanel({
         ) : (
           visibleEntries.map((entry) => (
             <button
-              key={entry.sha}
+              key={entry.path}
               type="button"
               className={`dashboard-github-entry is-${entry.type}`}
               disabled={entry.type === 'file' && !entry.cdnUrl}
