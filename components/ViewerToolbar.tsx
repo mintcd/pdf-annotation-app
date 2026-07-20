@@ -6,9 +6,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  ListTree,
   Maximize2,
-  PanelRightClose,
-  PanelRightOpen,
+  MessageSquare,
   Redo2,
   Undo2,
   ZoomIn,
@@ -28,17 +28,21 @@ export type PersistenceStatus = 'loading' | 'synced' | 'syncing' | 'queued' | 'e
 
 type ViewerToolbarProps = {
   annotationCount: number;
+  annotationsOpen: boolean;
   documentId: string;
-  onPanelToggle: () => void;
-  panelOpen: boolean;
+  onAnnotationsToggle: () => void;
+  onOutlineToggle: () => void;
+  outlineOpen: boolean;
   persistenceStatus: PersistenceStatus;
 }
 
 export default function ViewerToolbar({
   annotationCount,
+  annotationsOpen,
   documentId,
-  onPanelToggle,
-  panelOpen,
+  onAnnotationsToggle,
+  onOutlineToggle,
+  outlineOpen,
   persistenceStatus,
 }: ViewerToolbarProps) {
   const { provides: scroll, state: scrollState } = useScroll(documentId)
@@ -180,16 +184,26 @@ export default function ViewerToolbar({
         Download
       </Button>
       <Button
-        className={`panel-toggle${panelOpen ? ' is-active' : ''}`}
-        variant={panelOpen ? 'secondary' : 'ghost'}
+        className={`panel-toggle${outlineOpen ? ' is-active' : ''}`}
+        variant={outlineOpen ? 'secondary' : 'ghost'}
         size="small"
-        leadingIcon={panelOpen
-          ? <PanelRightClose aria-hidden="true" />
-          : <PanelRightOpen aria-hidden="true" />}
-        aria-label={panelOpen ? 'Close annotations panel' : 'Open annotations panel'}
-        aria-expanded={panelOpen}
-        title={panelOpen ? 'Close annotations' : 'Open annotations'}
-        onClick={onPanelToggle}
+        leadingIcon={<ListTree aria-hidden="true" />}
+        aria-label={outlineOpen ? 'Close table of contents' : 'Open table of contents'}
+        aria-expanded={outlineOpen}
+        title={outlineOpen ? 'Close table of contents' : 'Open table of contents'}
+        onClick={onOutlineToggle}
+      >
+        TOC
+      </Button>
+      <Button
+        className={`panel-toggle${annotationsOpen ? ' is-active' : ''}`}
+        variant={annotationsOpen ? 'secondary' : 'ghost'}
+        size="small"
+        leadingIcon={<MessageSquare aria-hidden="true" />}
+        aria-label={annotationsOpen ? 'Close annotations panel' : 'Open annotations panel'}
+        aria-expanded={annotationsOpen}
+        title={annotationsOpen ? 'Close annotations' : 'Open annotations'}
+        onClick={onAnnotationsToggle}
       >
         {annotationCount}
       </Button>

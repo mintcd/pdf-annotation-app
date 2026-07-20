@@ -1,6 +1,6 @@
 import { syncSessionFromRequest } from '../../../../utils/syncIdentity'
 
-export const runtime = 'nodejs'
+export const runtime = 'edge'
 
 export function GET(request: Request): Response {
   return Response.json(syncSessionFromRequest(request), {

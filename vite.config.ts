@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     vinext(),
     cloudflare({
-      remoteBindings: false,
+      remoteBindings: true,
       viteEnvironment: {
         name: "rsc",
         childEnvironments: ["ssr"],

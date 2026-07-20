@@ -16,6 +16,11 @@ export type PdfSelectionGeometry = {
   segmentRects: Rect[]
 }
 
+export type EnsurePdfDocumentResult = {
+  row: PdfDocumentRow
+  changed: boolean
+}
+
 export type PdfAnnotationPosition = {
   version: 1
   kind: 'pdf-highlight'
@@ -42,7 +47,7 @@ export async function ensurePdfDocument(
   source: PdfSource,
   documentsTable: DocumentsTable,
   documents: readonly PdfDocumentRow[],
-): Promise<PdfDocumentRow> {
+): Promise<EnsurePdfDocumentResult> {
   const fields = documentSourceFields(source)
 
   const current = documents.find((document) => document.source_key === fields.source_key)
@@ -51,13 +56,19 @@ export async function ensurePdfDocument(
       current.source_type !== fields.source_type
       || current.source_url !== fields.source_url
       || current.file_name !== fields.file_name
-      || current.title !== fields.title
     ) {
-      const updated = { ...current, ...fields, updated_at: syncTimestamp() }
+      const updated = {
+        ...current,
+        source_key: fields.source_key,
+        source_type: fields.source_type,
+        source_url: fields.source_url,
+        file_name: fields.file_name,
+        updated_at: syncTimestamp(),
+      }
       await documentsTable.put(updated)
-      return updated
+      return { row: updated, changed: true }
     }
-    return current
+    return { row: current, changed: false }
   }
 
   const now = syncTimestamp()
@@ -69,7 +80,7 @@ export async function ensurePdfDocument(
     number_of_annotations: 0,
   }
   await documentsTable.put(row)
-  return row
+  return { row, changed: true }
 }
 
 export function positionFromGeometry(geometry: PdfSelectionGeometry): PdfAnnotationPosition {

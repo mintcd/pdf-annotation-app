@@ -1,8 +1,11 @@
 'use client'
 
 import {
+  ArrowLeft,
   ArrowRight,
+  Check,
   Clock3,
+  Edit2,
   ExternalLink,
   FileSearch,
   FileText,
@@ -11,25 +14,50 @@ import {
   Lock,
   LogIn,
   LogOut,
-  Menu,
+  MessageSquare,
   Search,
+  Settings,
   Trash2,
   User,
   UserPlus,
   X,
 } from 'lucide-react'
-import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type FormEvent,
+  type RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Badge, type BadgeTone } from './design-system/badge'
 import { Button } from './design-system/button'
 import { Card } from './design-system/card'
 import { IconButton } from './design-system/icon-button'
 import { TextField } from './design-system/text-field'
 import { createRemotePdfSource } from '../lib/pdfSource'
-import type { PdfAnnotationRow, PdfDocumentRow } from '../utils/pdfSync'
+import { syncTimestamp, type PdfAnnotationRow, type PdfDocumentRow } from '../utils/pdfSync'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 
 type DocumentSummary = PdfDocumentRow & {
   annotations: PdfAnnotationRow[]
+}
+
+function documentRowFromSummary({ annotations: _annotations, ...document }: DocumentSummary): PdfDocumentRow {
+  return document
+}
+
+type DocumentGroup = {
+  key: string
+  label: string
+  documents: DocumentSummary[]
+}
+
+type EditingCommentState = {
+  documentId: string
+  annotationId: string
+  comment: string
 }
 
 function formatUpdatedAt(value: string): string {
@@ -80,7 +108,79 @@ function documentUrl(document: PdfDocumentRow): string | null {
   return document.source_type === 'remote' ? document.source_url : null
 }
 
-export default function Dashboard() {
+function toAbsoluteHttpUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return null
+
+  try {
+    return new URL(trimmed).href
+  } catch {
+    try {
+      return new URL(`https://${trimmed}`).href
+    } catch {
+      return null
+    }
+  }
+}
+
+function documentLocation(document: PdfDocumentRow): { host: string; path: string } {
+  const url = documentUrl(document)
+  if (!url) return { host: 'Local PDFs', path: document.file_name }
+
+  try {
+    const parsed = new URL(url)
+    return {
+      host: parsed.hostname.replace(/^www\./, ''),
+      path: `${parsed.pathname}${parsed.search}` || '/',
+    }
+  } catch {
+    return { host: 'Remote PDFs', path: url }
+  }
+}
+
+function groupDocumentsBySource(documents: DocumentSummary[]): DocumentGroup[] {
+  const groups = new Map<string, DocumentGroup>()
+
+  for (const document of documents) {
+    const url = documentUrl(document)
+    let key = 'local'
+    let label = 'Local PDFs'
+
+    if (url) {
+      try {
+        const parsed = new URL(url)
+        key = parsed.origin
+        label = parsed.hostname.replace(/^www\./, '')
+      } catch {
+        key = 'remote'
+        label = 'Remote PDFs'
+      }
+    }
+
+    const existing = groups.get(key)
+    if (existing) {
+      existing.documents.push(document)
+    } else {
+      groups.set(key, { key, label, documents: [document] })
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      documents: [...group.documents].sort((left, right) => (
+        right.updated_at.localeCompare(left.updated_at)
+        || left.title.localeCompare(right.title)
+      )),
+    }))
+    .sort((left, right) => {
+      if (left.key === 'local') return 1
+      if (right.key === 'local') return -1
+      return left.label.localeCompare(right.label)
+    })
+}
+
+export default function DashboardV2() {
   const sync = usePdfSyncEngine()
 
   if (!sync.sessionReady) {
@@ -245,17 +345,34 @@ function AuthenticatedDashboard() {
   const [urlError, setUrlError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [annotationActionId, setAnnotationActionId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [savingTitle, setSavingTitle] = useState(false)
+  const [editingComment, setEditingComment] = useState<EditingCommentState | null>(null)
+  const [deleteDocumentPrompt, setDeleteDocumentPrompt] = useState<DocumentSummary | null>(null)
+  const [deleteAnnotationPrompt, setDeleteAnnotationPrompt] = useState<{
+    document: DocumentSummary
+    annotation: PdfAnnotationRow
+  } | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
+
+  const flushSync = (label: string) => {
+    void sync.sync().catch((error) => {
+      console.error(`Failed to flush ${label}`, error)
+    })
+  }
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        searchRef.current?.focus()
+        setSelectedId(null)
+        window.requestAnimationFrame(() => searchRef.current?.focus())
       }
     }
     window.addEventListener('keydown', focusSearch)
@@ -269,7 +386,10 @@ function AuthenticatedDashboard() {
         ...document,
         annotations: annotationRows
           .filter((annotation) => annotation.document_id === document.id)
-          .sort((left, right) => left.page_index - right.page_index),
+          .sort((left, right) => {
+            if (left.page_index !== right.page_index) return left.page_index - right.page_index
+            return left.created_at.localeCompare(right.created_at)
+          }),
       }))
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
   }, [sync.tables.annotations, sync.tables.documents])
@@ -289,9 +409,9 @@ function AuthenticatedDashboard() {
     ))
   }, [documents, searchQuery])
 
-  const selectedDocument = filteredDocuments.find((document) => document.id === selectedId)
-    ?? filteredDocuments[0]
-    ?? null
+  const selectedDocument = selectedId
+    ? documents.find((document) => document.id === selectedId) ?? null
+    : null
   const totalAnnotations = documents.reduce((total, document) => total + document.annotations.length, 0)
   const syncInfo = syncPresentation({
     accepted: sync.acceptedAwaitingConfirmationCount,
@@ -303,9 +423,18 @@ function AuthenticatedDashboard() {
   })
   const dataError = sync.error
 
+  useEffect(() => {
+    setEditingTitle(false)
+    setDraftTitle(selectedDocument?.title ?? '')
+    setEditingComment(null)
+  }, [selectedDocument?.id, selectedDocument?.title])
+
   const openUrl = (rawUrl: string, annotationId?: string) => {
     try {
-      const source = createRemotePdfSource(rawUrl)
+      const absoluteUrl = toAbsoluteHttpUrl(rawUrl)
+      if (!absoluteUrl) throw new Error('Enter a valid PDF URL.')
+
+      const source = createRemotePdfSource(absoluteUrl)
       const params = new URLSearchParams({ url: source.originalUrl })
       if (annotationId) params.set('annotation', annotationId)
       window.location.assign(`/?${params.toString()}`)
@@ -320,18 +449,79 @@ function AuthenticatedDashboard() {
     openUrl(newUrl)
   }
 
-  const deleteDocument = async (document: DocumentSummary) => {
-    if (!window.confirm(`Delete “${document.title}” and all of its annotations?`)) return
+  const saveDocumentTitle = async (document: DocumentSummary, title: string) => {
+    const nextTitle = title.trim() || document.file_name
+    setSavingTitle(true)
 
+    try {
+      await documentsTable.put({
+        ...documentRowFromSummary(document),
+        title: nextTitle,
+        updated_at: syncTimestamp(),
+      })
+      flushSync('updated PDF title')
+      setEditingTitle(false)
+    } finally {
+      setSavingTitle(false)
+    }
+  }
+
+  const deleteDocument = async (document: DocumentSummary) => {
     setDeletingId(document.id)
     try {
       for (const annotation of document.annotations) {
         await annotationsTable.delete({ id: annotation.id })
       }
       await documentsTable.delete({ id: document.id })
+      flushSync('deleted PDF document')
       if (selectedId === document.id) setSelectedId(null)
+      setDeleteDocumentPrompt(null)
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  const deleteAnnotation = async (document: DocumentSummary, annotation: PdfAnnotationRow) => {
+    setAnnotationActionId(annotation.id)
+    try {
+      await annotationsTable.delete({ id: annotation.id })
+      await documentsTable.put({
+        ...documentRowFromSummary(document),
+        number_of_annotations: Math.max(document.annotations.length - 1, 0),
+        updated_at: syncTimestamp(),
+      })
+      flushSync('deleted PDF annotation')
+      setDeleteAnnotationPrompt(null)
+    } finally {
+      setAnnotationActionId(null)
+    }
+  }
+
+  const saveAnnotationComment = async () => {
+    if (!editingComment || !selectedDocument) return
+
+    const annotation = selectedDocument.annotations.find((row) => row.id === editingComment.annotationId)
+    if (!annotation) {
+      setEditingComment(null)
+      return
+    }
+
+    const nextComment = editingComment.comment.trim()
+    setAnnotationActionId(annotation.id)
+    try {
+      await annotationsTable.put({
+        ...annotation,
+        comment: nextComment || null,
+        updated_at: syncTimestamp(),
+      })
+      await documentsTable.put({
+        ...documentRowFromSummary(selectedDocument),
+        updated_at: syncTimestamp(),
+      })
+      flushSync('updated PDF annotation note')
+      setEditingComment(null)
+    } finally {
+      setAnnotationActionId(null)
     }
   }
 
@@ -357,129 +547,13 @@ function AuthenticatedDashboard() {
       }
 
       await sync.refreshSession()
-      setSidebarOpen(false)
+      setSettingsOpen(false)
     } catch (error) {
       setSignOutError(error instanceof Error ? error.message : 'Unable to log out')
     } finally {
       setSigningOut(false)
     }
   }
-
-  const sidebar = (
-    <>
-      <div className="dashboard-brand-row">
-        <div className="dashboard-brand">
-          <span className="dashboard-brand-mark" aria-hidden="true"><Layers3 /></span>
-          <span>
-            <strong>Annotation Studio</strong>
-            <small>{totalAnnotations} highlights across {documents.length} PDFs</small>
-          </span>
-        </div>
-        <IconButton
-          className="dashboard-sidebar-close"
-          label="Close library"
-          size="small"
-          onClick={() => setSidebarOpen(false)}
-        >
-          <X />
-        </IconButton>
-      </div>
-
-      <div className="dashboard-sidebar-actions">
-        <form className="dashboard-url-form" onSubmit={submitUrl}>
-          <TextField
-            label="Annotate a PDF"
-            type="url"
-            value={newUrl}
-            error={urlError || undefined}
-            placeholder="https://example.com/paper.pdf"
-            leadingIcon={<FileText />}
-            trailingElement={(
-              <IconButton label="Open PDF" tone="primary" size="small" type="submit">
-                <ArrowRight />
-              </IconButton>
-            )}
-            onChange={(event) => {
-              setNewUrl(event.target.value)
-              if (urlError) setUrlError('')
-            }}
-          />
-        </form>
-
-        <TextField
-          ref={searchRef}
-          type="search"
-          value={searchQuery}
-          placeholder="Search PDFs, highlights, and notes"
-          leadingIcon={<Search />}
-          trailingElement={<kbd className="dashboard-shortcut">⌘ K</kbd>}
-          aria-label="Search PDF library"
-          onChange={(event) => setSearchQuery(event.target.value)}
-        />
-      </div>
-
-      <div className="dashboard-library-heading">
-        <span>LIBRARY</span>
-        <Badge size="small">{filteredDocuments.length}</Badge>
-      </div>
-
-      <nav className="dashboard-library" aria-label="Annotated PDFs">
-        {filteredDocuments.length === 0 ? (
-          <div className="dashboard-sidebar-empty">
-            {!sync.ready
-              ? 'Loading your PDF library…'
-              : searchQuery
-                ? `No PDFs match “${searchQuery}”.`
-                : 'PDFs appear here after you open them for annotation.'}
-          </div>
-        ) : filteredDocuments.map((document) => {
-          const selected = selectedDocument?.id === document.id
-          return (
-            <button
-              key={document.id}
-              type="button"
-              className={`dashboard-document-button${selected ? ' is-selected' : ''}`}
-              aria-current={selected ? 'page' : undefined}
-              onClick={() => {
-                setSelectedId(document.id)
-                setSidebarOpen(false)
-              }}
-            >
-              <span className="dashboard-document-glyph" aria-hidden="true"><FileText /></span>
-              <span className="dashboard-document-copy">
-                <strong>{document.title}</strong>
-                <small>{document.source_url ?? 'Local PDF'}</small>
-              </span>
-              <span className="dashboard-document-count">{document.annotations.length}</span>
-            </button>
-          )
-        })}
-      </nav>
-
-      <div className="dashboard-sync">
-        <div className="dashboard-sync-card">
-          <span className="dashboard-sync-copy">
-            <Badge tone={syncInfo.tone} size="small" dot>Sync · {syncInfo.label}</Badge>
-            <span className="dashboard-account-label">Signed in as {sync.session.userId}</span>
-          </span>
-          <Button
-            variant="ghost"
-            size="small"
-            loading={signingOut}
-            leadingIcon={<LogOut aria-hidden="true" />}
-            onClick={() => void signOut()}
-          >
-            Logout
-          </Button>
-        </div>
-        {signOutError && (
-          <p className="dashboard-sign-out-error" role="alert">
-            {signOutError}
-          </p>
-        )}
-      </div>
-    </>
-  )
 
   return (
     <div className="dashboard-shell">
@@ -489,141 +563,776 @@ function AuthenticatedDashboard() {
         </div>
       )}
 
-      {sidebarOpen && (
-        <button
-          className="dashboard-backdrop"
-          type="button"
-          aria-label="Close library"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside className={`dashboard-sidebar${sidebarOpen ? ' is-open' : ''}`}>{sidebar}</aside>
-
       <main className="dashboard-main">
-        <header className="dashboard-mobile-header">
-          <IconButton label="Open library" size="small" onClick={() => setSidebarOpen(true)}>
-            <Menu />
-          </IconButton>
-          <strong>Annotation Studio</strong>
-          <span aria-hidden="true" />
-        </header>
-
         {selectedDocument ? (
-          <>
-            <header className="dashboard-hero">
-              <div className="dashboard-hero-copy">
-                <p className="dashboard-eyebrow"><FileText /> Selected PDF</p>
-                <h1>{selectedDocument.title}</h1>
-                <p className="dashboard-hero-url" title={selectedDocument.source_url ?? undefined}>
-                  {selectedDocument.source_url ?? 'This locally opened PDF is unavailable by URL.'}
-                </p>
-                <div className="dashboard-meta">
-                  <Badge tone="blue"><Highlighter /> {selectedDocument.annotations.length} highlights</Badge>
-                  <Badge><Clock3 /> Updated {formatUpdatedAt(selectedDocument.updated_at)}</Badge>
-                </div>
-              </div>
-              <div className="dashboard-hero-actions">
-                <Button
-                  variant="primary"
-                  leadingIcon={<ExternalLink />}
-                  disabled={!documentUrl(selectedDocument)}
-                  onClick={() => {
-                    const url = documentUrl(selectedDocument)
-                    if (url) openUrl(url)
-                  }}
-                >
-                  Open PDF
-                </Button>
-                <Button
-                  variant="danger"
-                  leadingIcon={<Trash2 />}
-                  loading={deletingId === selectedDocument.id}
-                  onClick={() => void deleteDocument(selectedDocument)}
-                >
-                  Delete
-                </Button>
-              </div>
-            </header>
-
-            <section className="dashboard-content" aria-label="PDF annotations">
-              <div className="dashboard-content-heading">
-                <span>
-                  <h2>Highlights & notes</h2>
-                  <p>Everything captured in this PDF.</p>
-                </span>
-                <Badge>{selectedDocument.annotations.length}</Badge>
-              </div>
-
-              {selectedDocument.annotations.length === 0 ? (
-                <Card className="dashboard-empty-annotations" variant="subtle">
-                  <FileSearch aria-hidden="true" />
-                  <h3>No highlights yet</h3>
-                  <p>Open this PDF and select text to create the first annotation.</p>
-                </Card>
-              ) : (
-                <div className="dashboard-annotation-grid">
-                  {selectedDocument.annotations.map((annotation) => (
-                    <Card
-                      key={annotation.id}
-                      className="dashboard-annotation-card"
-                      variant="elevated"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        const url = documentUrl(selectedDocument)
-                        if (url) openUrl(url, annotation.id)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter' && event.key !== ' ') return
-                        event.preventDefault()
-                        const url = documentUrl(selectedDocument)
-                        if (url) openUrl(url, annotation.id)
-                      }}
-                    >
-                      <div className="dashboard-annotation-topline">
-                        <Badge tone="blue" size="small">Page {annotation.page_index + 1}</Badge>
-                        <span
-                          className="dashboard-highlight-color"
-                          style={{ backgroundColor: annotation.color }}
-                          aria-label={`Highlight color ${annotation.color}`}
-                        />
-                      </div>
-                      <blockquote>{annotation.text || 'Selected text'}</blockquote>
-                      {annotation.comment && <p className="dashboard-annotation-comment">{annotation.comment}</p>}
-                      <span className="dashboard-annotation-open">Open highlight <ArrowRight /></span>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </section>
-          </>
+          <PdfDocumentDetail
+            document={selectedDocument}
+            deleting={deletingId === selectedDocument.id}
+            editingComment={editingComment}
+            editingTitle={editingTitle}
+            draftTitle={draftTitle}
+            savingAnnotationId={annotationActionId}
+            savingTitle={savingTitle}
+            onBack={() => setSelectedId(null)}
+            onCancelTitleEdit={() => {
+              setDraftTitle(selectedDocument.title)
+              setEditingTitle(false)
+            }}
+            onDeleteAnnotation={(annotation) => {
+              setDeleteAnnotationPrompt({ document: selectedDocument, annotation })
+            }}
+            onDeleteDocument={() => setDeleteDocumentPrompt(selectedDocument)}
+            onDraftTitleChange={setDraftTitle}
+            onOpenDocument={(annotationId) => {
+              const url = documentUrl(selectedDocument)
+              if (url) openUrl(url, annotationId)
+            }}
+            onSaveComment={() => void saveAnnotationComment()}
+            onSaveTitle={(event) => {
+              event.preventDefault()
+              void saveDocumentTitle(selectedDocument, draftTitle)
+            }}
+            onStartCommentEdit={(annotation) => {
+              setEditingComment({
+                documentId: selectedDocument.id,
+                annotationId: annotation.id,
+                comment: annotation.comment ?? '',
+              })
+            }}
+            onTitleEdit={() => setEditingTitle(true)}
+            onUpdateDraftComment={(comment) => {
+              setEditingComment((current) => current ? { ...current, comment } : current)
+            }}
+            onCancelCommentEdit={() => setEditingComment(null)}
+          />
         ) : (
-          <section className="dashboard-empty">
-            <Card className="dashboard-empty-card" variant="elevated" padding="large">
-              <span className="dashboard-empty-visual" aria-hidden="true"><Layers3 /></span>
-              <h1>{searchQuery ? 'No matching PDFs' : 'Your PDF annotation library'}</h1>
-              <p>
-                {searchQuery
-                  ? 'Try a different title, URL, highlight, or note.'
-                  : 'Paste a public PDF URL to open it, highlight text, and sync your notes.'}
-              </p>
-              {!searchQuery && (
-                <form className="dashboard-empty-form" onSubmit={submitUrl}>
-                  <TextField
-                    type="url"
-                    value={newUrl}
-                    error={urlError || undefined}
-                    placeholder="https://example.com/paper.pdf"
-                    leadingIcon={<FileText />}
-                    onChange={(event) => setNewUrl(event.target.value)}
-                  />
-                  <Button type="submit" trailingIcon={<ArrowRight />}>Open PDF</Button>
-                </form>
-              )}
-            </Card>
-          </section>
+          <PdfLibrary
+            documents={filteredDocuments}
+            totalAnnotations={totalAnnotations}
+            totalDocuments={documents.length}
+            searchQuery={searchQuery}
+            loading={!sync.ready}
+            newUrl={newUrl}
+            urlError={urlError}
+            searchRef={searchRef}
+            settingsOpen={settingsOpen}
+            syncInfo={syncInfo}
+            accountLabel={sync.session.userId}
+            signingOut={signingOut}
+            signOutError={signOutError}
+            onCloseSettings={() => setSettingsOpen(false)}
+            onNewUrlChange={(value) => {
+              setNewUrl(value)
+              if (urlError) setUrlError('')
+            }}
+            onSearchChange={setSearchQuery}
+            onSelectDocument={setSelectedId}
+            onSettingsToggle={() => setSettingsOpen((open) => !open)}
+            onSignOut={() => void signOut()}
+            onSubmitUrl={submitUrl}
+          />
         )}
       </main>
+
+      {deleteDocumentPrompt && (
+        <ConfirmDialog
+          title="Delete PDF"
+          message={`Delete "${deleteDocumentPrompt.title}" and all of its annotations? This action cannot be undone.`}
+          confirmLabel="Delete"
+          busy={deletingId === deleteDocumentPrompt.id}
+          onCancel={() => setDeleteDocumentPrompt(null)}
+          onConfirm={() => deleteDocument(deleteDocumentPrompt)}
+        />
+      )}
+
+      {deleteAnnotationPrompt && (
+        <ConfirmDialog
+          title="Delete annotation"
+          message="Delete this highlight and its note? This action cannot be undone."
+          confirmLabel="Delete"
+          busy={annotationActionId === deleteAnnotationPrompt.annotation.id}
+          onCancel={() => setDeleteAnnotationPrompt(null)}
+          onConfirm={() => deleteAnnotation(deleteAnnotationPrompt.document, deleteAnnotationPrompt.annotation)}
+        />
+      )}
+    </div>
+  )
+}
+
+function PdfLibrary({
+  documents,
+  totalAnnotations,
+  totalDocuments,
+  searchQuery,
+  loading,
+  newUrl,
+  urlError,
+  searchRef,
+  settingsOpen,
+  syncInfo,
+  accountLabel,
+  signingOut,
+  signOutError,
+  onCloseSettings,
+  onNewUrlChange,
+  onSearchChange,
+  onSelectDocument,
+  onSettingsToggle,
+  onSignOut,
+  onSubmitUrl,
+}: {
+  documents: DocumentSummary[]
+  totalAnnotations: number
+  totalDocuments: number
+  searchQuery: string
+  loading: boolean
+  newUrl: string
+  urlError: string
+  searchRef: RefObject<HTMLInputElement | null>
+  settingsOpen: boolean
+  syncInfo: { label: string; tone: BadgeTone }
+  accountLabel: string
+  signingOut: boolean
+  signOutError: string | null
+  onCloseSettings: () => void
+  onNewUrlChange: (value: string) => void
+  onSearchChange: (value: string) => void
+  onSelectDocument: (id: string) => void
+  onSettingsToggle: () => void
+  onSignOut: () => void
+  onSubmitUrl: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const groups = useMemo(() => groupDocumentsBySource(documents), [documents])
+  const hasDocuments = documents.length > 0
+
+  return (
+    <section className="dashboard-library-view" aria-label="All annotated PDFs">
+      <div className="dashboard-library-view-inner">
+        <header className="dashboard-library-hero">
+          <div className="dashboard-library-topbar">
+            <div className="dashboard-library-brand">
+              <span className="dashboard-brand-mark" aria-hidden="true"><Layers3 /></span>
+              <div>
+                <h1 className="dashboard-library-title">All PDFs</h1>
+                <p className="dashboard-library-summary">
+                  {searchQuery
+                    ? `${documents.length} result${documents.length === 1 ? '' : 's'} matching "${searchQuery}"`
+                    : `${totalDocuments} PDF${totalDocuments === 1 ? '' : 's'} with ${totalAnnotations} highlight${totalAnnotations === 1 ? '' : 's'}`}
+                </p>
+              </div>
+            </div>
+
+            <div className="dashboard-settings">
+              <IconButton
+                className="dashboard-settings-button"
+                label="Open settings"
+                aria-expanded={settingsOpen}
+                title="Settings"
+                onClick={onSettingsToggle}
+              >
+                <Settings />
+              </IconButton>
+
+              {settingsOpen && (
+                <DashboardSettingsWindow
+                  accountLabel={accountLabel}
+                  signOutError={signOutError}
+                  signingOut={signingOut}
+                  syncInfo={syncInfo}
+                  onClose={onCloseSettings}
+                  onSignOut={onSignOut}
+                />
+              )}
+            </div>
+          </div>
+
+          <div className="dashboard-library-controls">
+            <form className="dashboard-library-url-form" onSubmit={onSubmitUrl}>
+              <div className={`dashboard-control dashboard-url-control${urlError ? ' is-invalid' : ''}`}>
+                <FileText aria-hidden="true" />
+                <input
+                  className="dashboard-input"
+                  type="url"
+                  value={newUrl}
+                  placeholder="Paste a PDF URL"
+                  aria-label="PDF URL to annotate"
+                  aria-invalid={urlError ? true : undefined}
+                  onChange={(event) => onNewUrlChange(event.target.value)}
+                />
+                <IconButton label="Open PDF" tone="primary" size="small" type="submit">
+                  <ArrowRight />
+                </IconButton>
+              </div>
+              {urlError && <p className="dashboard-field-error" role="alert">{urlError}</p>}
+            </form>
+
+            <label className="dashboard-control dashboard-library-search">
+              <Search aria-hidden="true" />
+              <input
+                ref={searchRef}
+                className="dashboard-input"
+                type="search"
+                value={searchQuery}
+                placeholder="Search PDFs, highlights, and notes"
+                aria-label="Search PDF annotations"
+                onChange={(event) => onSearchChange(event.target.value)}
+              />
+              <kbd className="dashboard-shortcut">Ctrl K</kbd>
+            </label>
+
+            <div className="dashboard-library-sync" title={`Sync status: ${syncInfo.label}`}>
+              <Badge tone={syncInfo.tone} size="small" dot>
+                Sync · {syncInfo.label}
+              </Badge>
+            </div>
+          </div>
+        </header>
+
+        {!hasDocuments ? (
+          <LibraryEmptyState searchQuery={searchQuery} loading={loading} />
+        ) : (
+          <div className="dashboard-page-groups">
+            {groups.map((group) => (
+              <section key={group.key} className="dashboard-site-section">
+                <div className="dashboard-site-heading">
+                  <span className="dashboard-site-label">
+                    <span className="dashboard-site-logo dashboard-site-logo-fallback" aria-hidden="true">
+                      <FileText />
+                    </span>
+                    <h2 className="dashboard-site-title">{group.label}</h2>
+                  </span>
+                  <span className="dashboard-site-count">
+                    {group.documents.length} PDF{group.documents.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+
+                <div className="dashboard-page-grid">
+                  {group.documents.map((document) => {
+                    const location = documentLocation(document)
+                    const notePreview = document.annotations
+                      .map((annotation) => annotation.comment?.replace(/\s+/g, ' ').trim())
+                      .find(Boolean)
+
+                    return (
+                      <button
+                        key={document.id}
+                        type="button"
+                        className="dashboard-page-card"
+                        onClick={() => onSelectDocument(document.id)}
+                        aria-label={`Open annotations for ${document.title}`}
+                      >
+                        <span className="dashboard-page-card-top">
+                          <span className="dashboard-page-card-icon" aria-hidden="true">
+                            <FileText />
+                          </span>
+                          <span className="dashboard-page-card-count">
+                            {document.annotations.length}
+                          </span>
+                        </span>
+                        <span className="dashboard-page-card-title">{document.title}</span>
+                        <span className="dashboard-page-card-url" title={document.source_url ?? document.file_name}>
+                          {location.path}
+                        </span>
+                        {notePreview && (
+                          <span className="dashboard-page-card-note">
+                            {notePreview}
+                          </span>
+                        )}
+                        <span className="dashboard-page-card-footer">
+                          <span className="dashboard-page-card-date">
+                            <Clock3 aria-hidden="true" />
+                            {formatUpdatedAt(document.updated_at)}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function DashboardSettingsWindow({
+  accountLabel,
+  signOutError,
+  signingOut,
+  syncInfo,
+  onClose,
+  onSignOut,
+}: {
+  accountLabel: string
+  signOutError: string | null
+  signingOut: boolean
+  syncInfo: { label: string; tone: BadgeTone }
+  onClose: () => void
+  onSignOut: () => void
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+
+  return (
+    <>
+      <button
+        type="button"
+        className="dashboard-settings-scrim"
+        aria-label="Close settings"
+        onClick={onClose}
+      />
+      <div
+        className="dashboard-settings-window"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dashboard-settings-title"
+      >
+        <header className="dashboard-settings-window-header">
+          <div>
+            <h2 id="dashboard-settings-title" className="dashboard-settings-window-title">Settings</h2>
+            <p className="dashboard-settings-window-subtitle">Dashboard</p>
+          </div>
+          <IconButton
+            className="dashboard-settings-close"
+            label="Close settings"
+            size="small"
+            title="Close"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" />
+          </IconButton>
+        </header>
+
+        <section className="dashboard-settings-account" aria-label="Account">
+          <div className="dashboard-settings-user">
+            <User aria-hidden="true" />
+            <span>
+              <span className="dashboard-settings-label">Signed in</span>
+              <span className="dashboard-settings-value">{accountLabel}</span>
+            </span>
+          </div>
+          <div className="dashboard-settings-sync">
+            <Badge tone={syncInfo.tone} size="small" dot>Sync · {syncInfo.label}</Badge>
+          </div>
+          <Button
+            variant="secondary"
+            size="small"
+            fullWidth
+            loading={signingOut}
+            leadingIcon={<LogOut aria-hidden="true" />}
+            onClick={onSignOut}
+          >
+            Logout
+          </Button>
+          {signOutError && (
+            <p className="dashboard-sign-out-error dashboard-settings-error" role="alert">
+              {signOutError}
+            </p>
+          )}
+        </section>
+      </div>
+    </>
+  )
+}
+
+function PdfDocumentDetail({
+  document,
+  deleting,
+  editingComment,
+  editingTitle,
+  draftTitle,
+  savingAnnotationId,
+  savingTitle,
+  onBack,
+  onCancelCommentEdit,
+  onCancelTitleEdit,
+  onDeleteAnnotation,
+  onDeleteDocument,
+  onDraftTitleChange,
+  onOpenDocument,
+  onSaveComment,
+  onSaveTitle,
+  onStartCommentEdit,
+  onTitleEdit,
+  onUpdateDraftComment,
+}: {
+  document: DocumentSummary
+  deleting: boolean
+  editingComment: EditingCommentState | null
+  editingTitle: boolean
+  draftTitle: string
+  savingAnnotationId: string | null
+  savingTitle: boolean
+  onBack: () => void
+  onCancelCommentEdit: () => void
+  onCancelTitleEdit: () => void
+  onDeleteAnnotation: (annotation: PdfAnnotationRow) => void
+  onDeleteDocument: () => void
+  onDraftTitleChange: (value: string) => void
+  onOpenDocument: (annotationId?: string) => void
+  onSaveComment: () => void
+  onSaveTitle: (event: FormEvent<HTMLFormElement>) => void
+  onStartCommentEdit: (annotation: PdfAnnotationRow) => void
+  onTitleEdit: () => void
+  onUpdateDraftComment: (comment: string) => void
+}) {
+  const url = documentUrl(document)
+
+  return (
+    <>
+      <header className="dashboard-page-hero">
+        <div className="dashboard-page-hero-inner">
+          <button type="button" className="dashboard-detail-back" onClick={onBack}>
+            <ArrowLeft aria-hidden="true" />
+            All PDFs
+          </button>
+
+          <div className="dashboard-hero-layout">
+            <div className="dashboard-hero-copy">
+              <div className="dashboard-hero-title-row">
+                <span className="dashboard-hero-logo dashboard-hero-logo-fallback" aria-hidden="true">
+                  <FileText />
+                </span>
+                <div className="dashboard-hero-title-wrap">
+                  {editingTitle ? (
+                    <form className="dashboard-title-edit-form" onSubmit={onSaveTitle}>
+                      <input
+                        className="dashboard-input dashboard-title-input"
+                        value={draftTitle}
+                        onChange={(event) => onDraftTitleChange(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.preventDefault()
+                            onCancelTitleEdit()
+                          }
+                        }}
+                        aria-label="PDF title"
+                        disabled={savingTitle}
+                        autoFocus
+                      />
+                      <IconButton
+                        className="dashboard-title-action"
+                        label="Save PDF title"
+                        title="Save title"
+                        type="submit"
+                        disabled={savingTitle}
+                      >
+                        <Check aria-hidden="true" />
+                      </IconButton>
+                      <IconButton
+                        className="dashboard-title-action"
+                        label="Cancel title edit"
+                        title="Cancel"
+                        disabled={savingTitle}
+                        onClick={onCancelTitleEdit}
+                      >
+                        <X aria-hidden="true" />
+                      </IconButton>
+                    </form>
+                  ) : (
+                    <>
+                      <h1 className="dashboard-hero-title">{document.title}</h1>
+                      <IconButton
+                        className="dashboard-title-edit-button"
+                        label={`Edit title for ${document.title}`}
+                        title="Edit title"
+                        size="small"
+                        onClick={onTitleEdit}
+                      >
+                        <Edit2 aria-hidden="true" />
+                      </IconButton>
+                    </>
+                  )}
+                </div>
+              </div>
+              {url ? (
+                <a
+                  className="dashboard-hero-url"
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={url}
+                >
+                  <span>{url}</span>
+                </a>
+              ) : (
+                <p className="dashboard-hero-url" title={document.file_name}>
+                  <span>{document.file_name}</span>
+                </p>
+              )}
+              <div className="dashboard-meta-row">
+                <span className="dashboard-meta-chip">
+                  <Highlighter aria-hidden="true" />
+                  {document.annotations.length} highlight{document.annotations.length === 1 ? '' : 's'}
+                </span>
+                <span className="dashboard-meta-chip">
+                  <Clock3 aria-hidden="true" />
+                  Updated {formatUpdatedAt(document.updated_at)}
+                </span>
+              </div>
+            </div>
+
+            <div className="dashboard-hero-actions">
+              <Button
+                variant="primary"
+                disabled={!url}
+                trailingIcon={<ExternalLink aria-hidden="true" />}
+                onClick={() => onOpenDocument()}
+              >
+                Open PDF
+              </Button>
+              <Button
+                variant="danger"
+                loading={deleting}
+                leadingIcon={<Trash2 aria-hidden="true" />}
+                onClick={onDeleteDocument}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="dashboard-content">
+        <div className="dashboard-content-inner">
+          <div className="dashboard-content-heading">
+            <div>
+              <h2 className="dashboard-content-title">Highlights & notes</h2>
+              <p className="dashboard-content-description">Everything captured in this PDF.</p>
+            </div>
+            <span className="dashboard-result-count">{document.annotations.length}</span>
+          </div>
+
+          {document.annotations.length === 0 ? (
+            <Card className="dashboard-empty-annotations" variant="subtle">
+              <FileSearch aria-hidden="true" />
+              <h3>No highlights yet</h3>
+              <p>Open this PDF and select text to create the first annotation.</p>
+            </Card>
+          ) : (
+            <div className="dashboard-detail-annotation-list">
+              {document.annotations.map((annotation) => (
+                <AnnotationDetailCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  disabled={!url}
+                  editingComment={editingComment?.documentId === document.id
+                    && editingComment.annotationId === annotation.id
+                    ? editingComment
+                    : null}
+                  saving={savingAnnotationId === annotation.id}
+                  onCancelCommentEdit={onCancelCommentEdit}
+                  onDelete={() => onDeleteAnnotation(annotation)}
+                  onOpen={() => onOpenDocument(annotation.id)}
+                  onSaveComment={onSaveComment}
+                  onStartCommentEdit={() => onStartCommentEdit(annotation)}
+                  onUpdateDraftComment={onUpdateDraftComment}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+function AnnotationDetailCard({
+  annotation,
+  disabled,
+  editingComment,
+  saving,
+  onCancelCommentEdit,
+  onDelete,
+  onOpen,
+  onSaveComment,
+  onStartCommentEdit,
+  onUpdateDraftComment,
+}: {
+  annotation: PdfAnnotationRow
+  disabled: boolean
+  editingComment: EditingCommentState | null
+  saving: boolean
+  onCancelCommentEdit: () => void
+  onDelete: () => void
+  onOpen: () => void
+  onSaveComment: () => void
+  onStartCommentEdit: () => void
+  onUpdateDraftComment: (comment: string) => void
+}) {
+  return (
+    <article className="dashboard-detail-annotation-card">
+      <div className="dashboard-annotation-topline">
+        <Badge tone="blue" size="small">Page {annotation.page_index + 1}</Badge>
+        <span
+          className="dashboard-highlight-color"
+          style={{ '--highlight-color': annotation.color } as CSSProperties}
+          aria-label={`Highlight color ${annotation.color}`}
+        />
+      </div>
+
+      <blockquote>{annotation.text || 'Selected text'}</blockquote>
+
+      {editingComment ? (
+        <form
+          className="dashboard-comment-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSaveComment()
+          }}
+        >
+          <textarea
+            value={editingComment.comment}
+            placeholder="Add a note"
+            onChange={(event) => onUpdateDraftComment(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                onCancelCommentEdit()
+              }
+            }}
+            disabled={saving}
+            autoFocus
+          />
+          <div className="dashboard-comment-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              size="small"
+              disabled={saving}
+              leadingIcon={<X aria-hidden="true" />}
+              onClick={onCancelCommentEdit}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="small"
+              loading={saving}
+              leadingIcon={<Check aria-hidden="true" />}
+            >
+              Save note
+            </Button>
+          </div>
+        </form>
+      ) : annotation.comment ? (
+        <p className="dashboard-annotation-comment">{annotation.comment}</p>
+      ) : null}
+
+      <div className="dashboard-annotation-actions">
+        <button
+          type="button"
+          className="dashboard-inline-action"
+          disabled={disabled}
+          onClick={onOpen}
+        >
+          <ExternalLink aria-hidden="true" />
+          Open highlight
+        </button>
+        <button
+          type="button"
+          className="dashboard-inline-action"
+          onClick={onStartCommentEdit}
+        >
+          <MessageSquare aria-hidden="true" />
+          {annotation.comment ? 'Edit note' : 'Add note'}
+        </button>
+        <button
+          type="button"
+          className="dashboard-inline-action dashboard-inline-action-danger"
+          disabled={saving}
+          onClick={onDelete}
+        >
+          <Trash2 aria-hidden="true" />
+          Delete
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function LibraryEmptyState({
+  searchQuery,
+  loading,
+}: {
+  searchQuery: string
+  loading: boolean
+}) {
+  return (
+    <section className="dashboard-empty">
+      <Card className="dashboard-empty-card" variant="elevated" padding="large">
+        <span className="dashboard-empty-visual" aria-hidden="true">
+          {searchQuery ? <Search /> : <FileText />}
+        </span>
+        <h2 className="dashboard-empty-title">
+          {searchQuery ? 'Nothing found' : 'No annotated PDFs yet'}
+        </h2>
+        <p className="dashboard-empty-description">
+          {searchQuery
+            ? `No PDF, highlight, or note matches "${searchQuery}".`
+            : loading
+              ? 'Loading your PDF library...'
+              : 'Paste a PDF URL to begin.'}
+        </p>
+      </Card>
+    </section>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  message: string
+  confirmLabel: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => Promise<void>
+}) {
+  return (
+    <div className="dashboard-dialog-layer" role="presentation">
+      <button
+        type="button"
+        className="dashboard-dialog-scrim"
+        aria-label="Cancel"
+        disabled={busy}
+        onClick={onCancel}
+      />
+      <section
+        className="dashboard-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dashboard-confirm-title"
+      >
+        <h2 id="dashboard-confirm-title">{title}</h2>
+        <p>{message}</p>
+        <div className="dashboard-dialog-actions">
+          <Button variant="secondary" disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            loading={busy}
+            leadingIcon={<Trash2 aria-hidden="true" />}
+            onClick={() => void onConfirm()}
+          >
+            {confirmLabel}
+          </Button>
+        </div>
+      </section>
     </div>
   )
 }

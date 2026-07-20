@@ -1,10 +1,11 @@
 'use client'
 
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
 import { createRemotePdfSource } from '../lib/pdfSource'
+import type { PdfDocumentRow } from '../utils/pdfSync'
 import PDFViewer from './PDFViewer'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 
@@ -25,6 +26,25 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
       }
     }
   }, [url])
+  const source = result.source
+  const documentRow = useMemo(() => {
+    if (!source) return null
+
+    const documents = sync.tables.documents as readonly PdfDocumentRow[]
+    return documents.find((document) => document.source_key === source.documentKey) ?? null
+  }, [source, sync.tables.documents])
+  const documentTitle = source ? documentRow?.title ?? source.name : 'PDF Annotation Studio'
+
+  useEffect(() => {
+    if (!source || !sync.session.authenticated) return
+
+    const previousTitle = document.title
+    document.title = documentTitle
+
+    return () => {
+      document.title = previousTitle
+    }
+  }, [documentTitle, source, sync.session.authenticated])
 
   if (!result.source) {
     return (
@@ -68,8 +88,6 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
     )
   }
 
-  const source = result.source
-
   return (
     <main className="pdf-document-page">
       <header className="document-header">
@@ -84,7 +102,7 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
         <div className="document-identity">
           <span className="document-mark" aria-hidden="true"><FileText /></span>
           <span>
-            <strong>{source.name}</strong>
+            <strong>{documentTitle}</strong>
             <small title={source.originalUrl}>{source.originalUrl}</small>
           </span>
         </div>

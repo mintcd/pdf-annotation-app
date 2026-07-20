@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS annotations (
   updated_at TEXT NOT NULL,
   color TEXT NOT NULL,
   comment TEXT,
-  position TEXT NOT NULL,
+  position JSON NOT NULL,
   FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 

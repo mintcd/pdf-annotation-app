@@ -44,7 +44,7 @@ export default function AnnotationSidebar({
 
   const selectAnnotation = (annotation: PdfAnnotationRow) => {
     onSelect(annotation)
-    scroll?.scrollToPage({ pageNumber: annotation.page_index + 1, behavior: 'smooth' })
+    scroll?.scrollToPage({ pageNumber: annotation.page_index + 1, behavior: 'instant' })
   }
 
   return (

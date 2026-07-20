@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "db:local:migrate": "wrangler d1 execute pdf_annotation --local --file ./migrations/0001_pdf_annotation_sync.sql",
+    "db:remote:migrate": "wrangler d1 execute pdf_annotation --remote --file ./migrations/0001_pdf_annotation_sync.sql",
     "predev": "npm run typecheck",
     "prebuild": "npm run typecheck",
     "dev": "vinext dev --port 3000",
@@ -19,6 +20,7 @@
     "@embedpdf/engines": "^2.14.3",
     "@embedpdf/models": "^2.14.3",
     "@embedpdf/plugin-annotation": "^2.14.3",
+    "@embedpdf/plugin-bookmark": "^2.14.3",
     "@embedpdf/plugin-document-manager": "^2.14.3",
     "@embedpdf/plugin-export": "^2.14.3",
     "@embedpdf/plugin-history": "^2.14.3",
@@ -29,7 +31,7 @@
     "@embedpdf/plugin-viewport": "^2.14.3",
     "@embedpdf/plugin-zoom": "^2.14.3",
     "@embedpdf/snippet": "^2.14.3",
-    "@mintcd/sync-engine": "^1.1.0",
+    "@mintcd/sync-engine": "^1.1.1",
     "katex": "^0.16.47",
     "lucide-react": "^1.17.0",
     "react": "^19.0.0",
@@ -39,12 +41,14 @@
     "@cloudflare/vite-plugin": "^1.44.0",
     "@tailwindcss/postcss": "^4.3.0",
     "@types/react": "^19.2.17",
+    "@vitejs/plugin-rsc": "^0.5.28",
     "autoprefixer": "^10.0.1",
     "postcss": "^8.4.38",
+    "react-server-dom-webpack": "^19.2.7",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.8.2",
-    "vinext": "^0.0.14",
-    "vite": "^7.3.1",
+    "vinext": "^0.1.8",
+    "vite": "^8.1.5",
     "wrangler": "^4.69.0"
   }
 }

@@ -1,10 +1,13 @@
-/node_modules
+node_modules
 .continue
 /dist
-/.vinext
-/.wrangler
+.vinext
+.next
+.wrangler
 tsconfig.tsbuildinfo
 .agents
 
 dev-server.err.log
 dev-server.out.log
+.tmp-vinext-dev.err.log
+.tmp-vinext-dev.out.log

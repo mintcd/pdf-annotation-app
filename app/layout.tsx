@@ -1,15 +1,16 @@
 // @ts-ignore - global stylesheet is handled by the bundler
 import '../components/design-system/styles/tokens.css'
 import '../styles/global.css'
-import SyncEngineProvider from '../components/SyncEngineProvider'
+import BrowserResizeObserverErrorGuard from '../components/BrowserResizeObserverErrorGuard'
+
+export const runtime = 'edge'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <SyncEngineProvider>
-          {children}
-        </SyncEngineProvider>
+        <BrowserResizeObserverErrorGuard />
+        {children}
       </body>
     </html>
   )

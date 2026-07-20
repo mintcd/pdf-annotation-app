@@ -1,5 +1,6 @@
 import Dashboard from '../components/Dashboard'
 import PdfDocumentPage from '../components/PdfDocumentPage'
+import SyncEngineProvider from '../components/SyncEngineProvider'
 
 type SearchParams = Record<string, string | string[] | undefined>
 
@@ -19,12 +20,20 @@ export default async function Page({
   const resolved = { ...(await searchParams) }
   const url = first(resolved.url).trim()
 
-  if (!url) return <Dashboard />
+  if (!url) {
+    return (
+      <SyncEngineProvider>
+        <Dashboard />
+      </SyncEngineProvider>
+    )
+  }
 
   return (
-    <PdfDocumentPage
-      url={url}
-      initialAnnotationId={first(resolved.annotation).trim() || undefined}
-    />
+    <SyncEngineProvider>
+      <PdfDocumentPage
+        url={url}
+        initialAnnotationId={first(resolved.annotation).trim() || undefined}
+      />
+    </SyncEngineProvider>
   )
 }
