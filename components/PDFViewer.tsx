@@ -24,17 +24,16 @@ import { Scroller, ScrollPluginPackage, useScroll } from '@embedpdf/plugin-scrol
 import { SelectionLayer, SelectionPluginPackage } from '@embedpdf/plugin-selection/react'
 import { Viewport, ViewportPluginPackage } from '@embedpdf/plugin-viewport/react'
 import { ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
-import { eq, useLiveQuery, useSyncStatus } from '@mintcd/sync-engine'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PdfSource } from '../lib/pdfSource'
 import { sourceForEmbedPdf } from '../lib/pdfSource'
-import { db } from '../utils/engine'
 import {
   ensurePdfDocument,
   highlightAnnotationFromRow,
   isPdfAnnotatorHighlight,
   positionFromAnnotation,
   positionFromGeometry,
+  serializePdfPosition,
   syncTimestamp,
   type PdfAnnotationRow,
   type PdfDocumentRow,
@@ -42,6 +41,7 @@ import {
 } from '../utils/pdfSync'
 import AnnotationSidebar from './AnnotationSidebar'
 import SelectionPanel, { HIGHLIGHT_COLORS } from './SelectionPanel'
+import { usePdfSyncEngine } from './SyncEngineProvider'
 import ViewerToolbar, { type PersistenceStatus } from './ViewerToolbar'
 
 type PDFViewerProps = {
@@ -129,8 +129,11 @@ function SyncedPdfWorkspace({
 }) {
   const { provides: annotationScope, state: annotationState } = useAnnotation(documentId)
   const { provides: scroll } = useScroll(documentId)
-  const sync = useSyncStatus()
-  const liveAnnotations = useLiveQuery(db.select().from('annotations'))
+  const sync = usePdfSyncEngine()
+  const documentsTable = useMemo(() => sync.db.table('documents'), [sync.db])
+  const annotationsTable = useMemo(() => sync.db.table('annotations'), [sync.db])
+  const documents = sync.tables.documents as readonly PdfDocumentRow[]
+  const liveAnnotations = sync.tables.annotations as readonly PdfAnnotationRow[]
   const [documentRow, setDocumentRow] = useState<PdfDocumentRow | null>(null)
   const [documentError, setDocumentError] = useState('')
   const [highlightColor, setHighlightColor] = useState<string>(HIGHLIGHT_COLORS[0].value)
@@ -143,11 +146,13 @@ function SyncedPdfWorkspace({
   }, [documentId, initialAnnotationId])
 
   useEffect(() => {
+    if (!sync.ready) return
+
     let active = true
     setDocumentRow(null)
     setDocumentError('')
 
-    void ensurePdfDocument(source).then(
+    void ensurePdfDocument(source, documentsTable, documents).then(
       (row) => {
         if (active) setDocumentRow(row)
       },
@@ -160,13 +165,13 @@ function SyncedPdfWorkspace({
     return () => {
       active = false
     }
-  }, [source])
+  }, [documents, documentsTable, source, sync.ready])
 
   const annotationRows = useMemo(() => {
     if (!documentRow) return []
-    return ((liveAnnotations.data ?? []) as PdfAnnotationRow[])
+    return liveAnnotations
       .filter((annotation) => annotation.document_id === documentRow.id)
-  }, [documentRow, liveAnnotations.data])
+  }, [documentRow, liveAnnotations])
 
   useEffect(() => {
     if (!annotationScope) return
@@ -212,6 +217,7 @@ function SyncedPdfWorkspace({
 
   useEffect(() => {
     if (!annotationScope || !documentRow) return
+    const rowsById = new Map(annotationRows.map((row) => [row.id, row]))
 
     return annotationScope.onAnnotationEvent((event) => {
       if (event.type === 'loaded') return
@@ -220,60 +226,53 @@ function SyncedPdfWorkspace({
 
       if (event.type === 'update') {
         const annotation = event.annotation as PdfHighlightAnnoObject
+        const current = rowsById.get(annotation.id)
+        if (!current) return
+
         const now = syncTimestamp()
-        void db
-          .update({
-            page_index: event.pageIndex,
-            color: annotation.strokeColor ?? annotation.color ?? HIGHLIGHT_COLORS[0].value,
-            comment: annotation.contents?.trim() || null,
-            position: positionFromAnnotation(annotation) as unknown as Record<string, unknown>,
-            updated_at: now,
-          })
-          .from('annotations')
-          .where(eq('id', annotation.id))
-          .execute()
+        void annotationsTable.put({
+          ...current,
+          page_index: event.pageIndex,
+          color: annotation.strokeColor ?? annotation.color ?? HIGHLIGHT_COLORS[0].value,
+          comment: annotation.contents?.trim() || null,
+          position: serializePdfPosition(positionFromAnnotation(annotation)),
+          updated_at: now,
+        })
       }
 
       if (event.type === 'delete') {
-        void db
-          .delete()
-          .from('annotations')
-          .where(eq('id', event.annotation.id))
-          .execute()
+        void annotationsTable.delete({ id: event.annotation.id })
       }
     })
-  }, [annotationScope, documentRow, source.documentKey])
+  }, [annotationRows, annotationScope, annotationsTable, documentRow, source.documentKey])
 
   const selectedAnnotationId = annotationState.selectedUids[0] ?? annotationState.selectedUid ?? null
 
   const persistenceStatus = useMemo<PersistenceStatus>(() => {
-    if (!documentRow || liveAnnotations.loading) return 'loading'
-    if (documentError || liveAnnotations.error || sync.status === 'error') return 'error'
-    if (sync.isSyncing) return 'syncing'
-    if (!sync.isOnline || sync.status === 'offline' || (sync.pendingCount ?? 0) > 0) return 'queued'
+    if (!sync.ready || !documentRow || sync.phase === 'opening') return 'loading'
+    if (documentError || sync.error || sync.phase === 'error') return 'error'
+    if (sync.phase === 'syncing') return 'syncing'
+    if (!sync.isOnline || sync.pendingProposalCount > 0 || sync.acceptedAwaitingConfirmationCount > 0) return 'queued'
     return 'synced'
   }, [
     documentError,
     documentRow,
-    liveAnnotations.error,
-    liveAnnotations.loading,
+    sync.acceptedAwaitingConfirmationCount,
+    sync.error,
     sync.isOnline,
-    sync.isSyncing,
-    sync.pendingCount,
-    sync.status,
+    sync.pendingProposalCount,
+    sync.phase,
+    sync.ready,
   ])
 
   const updateDocumentAnnotationCount = useCallback(async (nextCount: number) => {
     if (!documentRow) return
-    await db
-      .update({
-        number_of_annotations: Math.max(nextCount, 0),
-        updated_at: syncTimestamp(),
-      })
-      .from('documents')
-      .where(eq('id', documentRow.id))
-      .execute()
-  }, [documentRow])
+    await documentsTable.put({
+      ...documentRow,
+      number_of_annotations: Math.max(nextCount, 0),
+      updated_at: syncTimestamp(),
+    })
+  }, [documentRow, documentsTable])
 
   const createHighlight = useCallback(async ({
     color,
@@ -287,21 +286,20 @@ function SyncedPdfWorkspace({
     if (!documentRow) throw new Error('Document sync is not ready yet.')
 
     const now = syncTimestamp()
-    const result = await db
-      .insert(geometry.map((item) => ({
-        document_id: documentRow.id,
-        page_index: item.pageIndex,
-        text,
-        created_at: now,
-        updated_at: now,
-        color,
-        comment: null,
-        position: positionFromGeometry(item) as unknown as Record<string, unknown>,
-      })))
-      .from('annotations')
-      .execute()
+    const insertedRows: PdfAnnotationRow[] = geometry.map((item) => ({
+      id: createRowId('annotation'),
+      document_id: documentRow.id,
+      page_index: item.pageIndex,
+      text,
+      created_at: now,
+      updated_at: now,
+      color,
+      comment: null,
+      position: serializePdfPosition(positionFromGeometry(item)),
+    }))
 
-    const insertedRows = result.rows as PdfAnnotationRow[]
+    await Promise.all(insertedRows.map((row) => annotationsTable.put(row)))
+
     for (const row of insertedRows) {
       const annotation = highlightAnnotationFromRow(row, source.documentKey)
       if (!annotation) continue
@@ -315,6 +313,7 @@ function SyncedPdfWorkspace({
   }, [
     annotationRows.length,
     annotationScope,
+    annotationsTable,
     documentRow,
     source.documentKey,
     updateDocumentAnnotationCount,
@@ -325,49 +324,42 @@ function SyncedPdfWorkspace({
   }, [annotationScope])
 
   const changeAnnotationColor = useCallback(async (annotation: PdfAnnotationRow, color: string) => {
-    await db
-      .update({ color, updated_at: syncTimestamp() })
-      .from('annotations')
-      .where(eq('id', annotation.id))
-      .execute()
+    await annotationsTable.put({
+      ...annotation,
+      color,
+      updated_at: syncTimestamp(),
+    })
 
     annotationScope?.syncAnnotationObject(annotation.id, {
       strokeColor: color,
       color,
       modified: new Date(),
     })
-  }, [annotationScope])
+  }, [annotationScope, annotationsTable])
 
   const changeAnnotationComment = useCallback(async (annotation: PdfAnnotationRow, comment: string) => {
     const nextComment = comment.trim()
-    await db
-      .update({
-        comment: nextComment || null,
-        updated_at: syncTimestamp(),
-      })
-      .from('annotations')
-      .where(eq('id', annotation.id))
-      .execute()
+    await annotationsTable.put({
+      ...annotation,
+      comment: nextComment || null,
+      updated_at: syncTimestamp(),
+    })
 
     annotationScope?.syncAnnotationObject(annotation.id, {
       contents: nextComment || undefined,
       modified: new Date(),
     })
-  }, [annotationScope])
+  }, [annotationScope, annotationsTable])
 
   const deleteAnnotation = useCallback(async (annotation: PdfAnnotationRow) => {
     localWriteIds.current.add(annotation.id)
     annotationScope?.deleteAnnotation(annotation.page_index, annotation.id)
     queueMicrotask(() => localWriteIds.current.delete(annotation.id))
 
-    await db
-      .delete()
-      .from('annotations')
-      .where(eq('id', annotation.id))
-      .execute()
+    await annotationsTable.delete({ id: annotation.id })
 
     await updateDocumentAnnotationCount(annotationRows.length - 1)
-  }, [annotationRows.length, annotationScope, updateDocumentAnnotationCount])
+  }, [annotationRows.length, annotationScope, annotationsTable, updateDocumentAnnotationCount])
 
   return (
     <div className={`viewer-workspace ${panelOpen ? 'has-sidebar' : ''}`}>
@@ -459,4 +451,8 @@ function annotationNeedsSync(current: PdfAnnotationObject, next: PdfHighlightAnn
     || currentHighlight.strokeColor !== next.strokeColor
     || currentHighlight.color !== next.color
     || (current.contents ?? '') !== (next.contents ?? '')
+}
+
+function createRowId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`}`
 }

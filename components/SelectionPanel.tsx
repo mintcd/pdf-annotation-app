@@ -1,8 +1,8 @@
 import { useSelectionCapability } from '@embedpdf/plugin-selection/react'
 import { Highlighter } from 'lucide-react'
 import { type CSSProperties, useState } from 'react'
-import { Button } from '../design-system/button'
-import { Toolbar, ToolbarGroup, ToolbarSeparator } from '../design-system/toolbar'
+import { Button } from './design-system/button'
+import { Toolbar, ToolbarGroup, ToolbarSeparator } from './design-system/toolbar'
 import type { PdfSelectionGeometry } from '../utils/pdfSync'
 
 export const HIGHLIGHT_COLORS = [

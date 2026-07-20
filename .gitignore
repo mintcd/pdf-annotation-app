@@ -4,3 +4,7 @@
 /.vinext
 /.wrangler
 tsconfig.tsbuildinfo
+.agents
+
+dev-server.err.log
+dev-server.out.log

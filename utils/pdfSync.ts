@@ -1,33 +1,14 @@
 import { PdfAnnotationSubtype, PdfBlendMode, type PdfHighlightAnnoObject, type Rect } from '@embedpdf/models'
-import { eq } from '@mintcd/sync-engine'
+import type { SyncTableClient } from '@mintcd/sync-engine/client'
 import { type PdfSource } from '../lib/pdfSource'
-import { db } from './engine'
+import type { replicaSchema, Row } from './engine'
 
 export const PDF_ANNOTATION_SOURCE = 'mintcd-pdf-annotator'
 
-export type PdfDocumentRow = {
-  id: string
-  source_key: string
-  source_type: string
-  source_url: string | null
-  file_name: string
-  title: string
-  created_at: string
-  updated_at: string
-  number_of_annotations: number | null
-}
-
-export type PdfAnnotationRow = {
-  id: string
-  document_id: string
-  page_index: number
-  text: string
-  created_at: string
-  updated_at: string
-  color: string
-  comment: string | null
-  position: Record<string, unknown> | string | null
-}
+export type PdfDocumentRow = Row<'documents'>
+export type PdfAnnotationRow = Row<'annotations'>
+export type DocumentsTable = SyncTableClient<typeof replicaSchema, 'documents'>
+export type AnnotationsTable = SyncTableClient<typeof replicaSchema, 'annotations'>
 
 export type PdfSelectionGeometry = {
   pageIndex: number
@@ -57,42 +38,38 @@ export function documentSourceFields(source: PdfSource) {
   }
 }
 
-export async function ensurePdfDocument(source: PdfSource): Promise<PdfDocumentRow> {
+export async function ensurePdfDocument(
+  source: PdfSource,
+  documentsTable: DocumentsTable,
+  documents: readonly PdfDocumentRow[],
+): Promise<PdfDocumentRow> {
   const fields = documentSourceFields(source)
-  const existing = await db
-    .select()
-    .from('documents')
-    .where(eq('source_key', fields.source_key))
-    .execute() as PdfDocumentRow[]
 
-  if (existing[0]) {
-    const current = existing[0]
+  const current = documents.find((document) => document.source_key === fields.source_key)
+  if (current) {
     if (
       current.source_type !== fields.source_type
       || current.source_url !== fields.source_url
       || current.file_name !== fields.file_name
       || current.title !== fields.title
     ) {
-      await db
-        .update({ ...fields, updated_at: syncTimestamp() })
-        .from('documents')
-        .where(eq('id', current.id))
-        .execute()
+      const updated = { ...current, ...fields, updated_at: syncTimestamp() }
+      await documentsTable.put(updated)
+      return updated
     }
     return current
   }
 
   const now = syncTimestamp()
-  const result = await db.insert({
+  const row: PdfDocumentRow = {
+    id: fields.source_key,
     ...fields,
     created_at: now,
     updated_at: now,
     number_of_annotations: 0,
-  }).from('documents').execute()
-
-  const inserted = result.rows[0] as PdfDocumentRow | undefined
-  if (!inserted) throw new Error(`Failed to create document row for ${source.name}`)
-  return inserted
+  }
+  await documentsTable.put(row)
+  return row
 }
 
 export function positionFromGeometry(geometry: PdfSelectionGeometry): PdfAnnotationPosition {
@@ -113,6 +90,10 @@ export function positionFromAnnotation(annotation: PdfHighlightAnnoObject): PdfA
     rect: annotation.rect,
     segmentRects: annotation.segmentRects,
   }
+}
+
+export function serializePdfPosition(position: PdfAnnotationPosition): string {
+  return JSON.stringify(position)
 }
 
 export function normalizePdfPosition(value: PdfAnnotationRow['position']): PdfAnnotationPosition | null {

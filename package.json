@@ -5,11 +5,11 @@
   "private": true,
   "scripts": {
     "db:local:migrate": "wrangler d1 execute pdf_annotation --local --file ./migrations/0001_pdf_annotation_sync.sql",
-    "predev": "npm run db:local:migrate && sync-engine ./sync.config.ts",
-    "prebuild": "npm run db:local:migrate && sync-engine ./sync.config.ts",
+    "predev": "npm run typecheck",
+    "prebuild": "npm run typecheck",
     "dev": "vinext dev --port 3000",
     "build": "vinext build",
-    "predeploy": "npm run db:local:migrate && sync-engine ./sync.config.ts && npm run typecheck",
+    "predeploy": "npm run typecheck",
     "deploy": "vinext deploy",
     "start": "vinext start",
     "typecheck": "tsc --noEmit --incremental false"
@@ -29,7 +29,7 @@
     "@embedpdf/plugin-viewport": "^2.14.3",
     "@embedpdf/plugin-zoom": "^2.14.3",
     "@embedpdf/snippet": "^2.14.3",
-    "@mintcd/sync-engine": "^0.1.8",
+    "@mintcd/sync-engine": "^1.1.0",
     "katex": "^0.16.47",
     "lucide-react": "^1.17.0",
     "react": "^19.0.0",

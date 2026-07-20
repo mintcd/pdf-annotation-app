@@ -8,13 +8,13 @@ const schema: Record<string, string> = {
   "entity": "TEXT",
   "op_type": "TEXT",
   "payload": "TEXT",
-  "created_at": "TEXT",
+  "created_at": "INTEGER",
   "processed": "INTEGER",
   "attempts": "INTEGER",
   "last_error": "TEXT",
   "client_id": "TEXT",
   "client_op_id": "TEXT",
-  "sent_at": "TEXT",
+  "sent_at": "INTEGER",
   "undone": "INTEGER",
   "instance_id": "TEXT"
 };

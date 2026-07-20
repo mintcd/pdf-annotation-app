@@ -1,0 +1,43 @@
+.panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-xl);
+  color: var(--ds-color-text);
+  font-family: var(--ds-font-family-sans);
+}
+
+.default {
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-md);
+}
+
+.glass {
+  border-color: color-mix(in srgb, var(--ds-color-border) 86%, transparent);
+  background: color-mix(in srgb, var(--ds-color-surface) 94%, transparent);
+  box-shadow: var(--ds-shadow-lg);
+  backdrop-filter: blur(22px);
+}
+
+.header,
+.footer {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+}
+
+.header {
+  border-bottom: 1px solid var(--ds-color-border);
+}
+
+.body {
+  min-height: 0;
+}
+
+.footer {
+  border-top: 1px solid var(--ds-color-border);
+  color: var(--ds-color-text-tertiary);
+  background: color-mix(in srgb, var(--ds-color-surface-subtle) 72%, transparent);
+  font-size: var(--ds-font-size-xs);
+}

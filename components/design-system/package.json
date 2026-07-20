@@ -1,0 +1,37 @@
+{
+  "name": "@mintcd/design-system",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    ".": "./index.ts",
+    "./badge": "./badge.ts",
+    "./button": "./button.ts",
+    "./card": "./card.ts",
+    "./icon-button": "./icon-button.ts",
+    "./latex": "./latex.ts",
+    "./panel": "./panel.ts",
+    "./select": "./select.ts",
+    "./text-field": "./text-field.ts",
+    "./toolbar": "./toolbar.ts",
+    "./tokens.css": "./styles/tokens.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "katex": "^0.16.23"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "typescript": "^5"
+  }
+}

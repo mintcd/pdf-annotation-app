@@ -1,11 +1,26 @@
-const config = {
-  dbName: 'pdf-annotation-db',
-  dbVersion: 1,
-  outputPaths: {
-    sw: '/public/sw.sync.js',
-    apiRoutes: '/app/api',
-    engine: 'utils/engine.ts',
-  },
-};
+import { defineNextSyncConfig } from '@mintcd/sync-engine/next'
 
-export default config;
+export default defineNextSyncConfig({
+  d1: {
+    configPath: './wrangler.jsonc',
+    binding: 'DB',
+  },
+  schema: {
+    include: ['documents', 'annotations'],
+  },
+  client: {
+    databaseName: 'pdf-annotation-db',
+  },
+  server: {
+    module: './utils/syncServer',
+    exportName: 'syncServer',
+  },
+  routes: {
+    appDir: './app',
+    basePath: '/api/sync',
+  },
+  output: {
+    config: './utils/engine.ts',
+    serviceWorker: false,
+  },
+})

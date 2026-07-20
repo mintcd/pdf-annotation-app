@@ -1,0 +1,151 @@
+:root {
+  color-scheme: light;
+
+  /* Blue Ink palette */
+  --ds-color-blue-50: #eff6ff;
+  --ds-color-blue-100: #dbeafe;
+  --ds-color-blue-200: #bfdbfe;
+  --ds-color-blue-300: #93c5fd;
+  --ds-color-blue-400: #60a5fa;
+  --ds-color-blue-500: #3b82f6;
+  --ds-color-blue-600: #2563eb;
+  --ds-color-blue-700: #1d4ed8;
+  --ds-color-blue-800: #1e40af;
+  --ds-color-blue-900: #1e3a8a;
+  --ds-color-blue-950: #172554;
+
+  /* Cool neutrals */
+  --ds-color-slate-0: #ffffff;
+  --ds-color-slate-25: #fbfcfe;
+  --ds-color-slate-50: #f6f8fc;
+  --ds-color-slate-100: #eef3f9;
+  --ds-color-slate-200: #d9e2ef;
+  --ds-color-slate-300: #bdc9d9;
+  --ds-color-slate-400: #8c9aae;
+  --ds-color-slate-500: #607089;
+  --ds-color-slate-600: #46556c;
+  --ds-color-slate-700: #324056;
+  --ds-color-slate-800: #202c40;
+  --ds-color-slate-900: #152033;
+  --ds-color-slate-950: #0c1424;
+
+  /* Semantic colors */
+  --ds-color-green-50: #edfdf4;
+  --ds-color-green-700: #15803d;
+  --ds-color-amber-50: #fff8e8;
+  --ds-color-amber-700: #b45309;
+  --ds-color-red-50: #fff1f3;
+  --ds-color-red-700: #be123c;
+  --ds-color-sky-50: #f0f9ff;
+  --ds-color-sky-700: #0369a1;
+
+  /* Semantic aliases: components consume these, not palette values. */
+  --ds-color-primary: var(--ds-color-blue-600);
+  --ds-color-primary-hover: var(--ds-color-blue-700);
+  --ds-color-primary-pressed: var(--ds-color-blue-800);
+  --ds-color-primary-soft: var(--ds-color-blue-50);
+  --ds-color-primary-soft-hover: var(--ds-color-blue-100);
+  --ds-color-focus: var(--ds-color-blue-400);
+
+  --ds-color-canvas: var(--ds-color-slate-50);
+  --ds-color-surface: var(--ds-color-slate-0);
+  --ds-color-surface-subtle: var(--ds-color-slate-100);
+  --ds-color-surface-hover: #e7edf6;
+  --ds-color-border: var(--ds-color-slate-200);
+  --ds-color-border-strong: var(--ds-color-slate-300);
+  --ds-color-text: var(--ds-color-slate-900);
+  --ds-color-text-secondary: var(--ds-color-slate-500);
+  --ds-color-text-tertiary: var(--ds-color-slate-400);
+  --ds-color-text-inverse: var(--ds-color-slate-0);
+
+  --ds-color-success: var(--ds-color-green-700);
+  --ds-color-success-soft: var(--ds-color-green-50);
+  --ds-color-warning: var(--ds-color-amber-700);
+  --ds-color-warning-soft: var(--ds-color-amber-50);
+  --ds-color-danger: var(--ds-color-red-700);
+  --ds-color-danger-soft: var(--ds-color-red-50);
+  --ds-color-info: var(--ds-color-sky-700);
+  --ds-color-info-soft: var(--ds-color-sky-50);
+
+  /* Four-pixel layout scale */
+  --ds-space-0: 0;
+  --ds-space-1: 0.25rem;
+  --ds-space-2: 0.5rem;
+  --ds-space-3: 0.75rem;
+  --ds-space-4: 1rem;
+  --ds-space-5: 1.25rem;
+  --ds-space-6: 1.5rem;
+  --ds-space-8: 2rem;
+  --ds-space-10: 2.5rem;
+  --ds-space-12: 3rem;
+  --ds-space-16: 4rem;
+
+  --ds-radius-sm: 0.375rem;
+  --ds-radius-md: 0.5rem;
+  --ds-radius-lg: 0.75rem;
+  --ds-radius-xl: 1rem;
+  --ds-radius-2xl: 1.5rem;
+  --ds-radius-full: 9999px;
+
+  --ds-font-family-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ds-font-size-xs: 0.75rem;
+  --ds-font-size-sm: 0.875rem;
+  --ds-font-size-md: 1rem;
+  --ds-font-size-lg: 1.125rem;
+  --ds-font-size-xl: 1.5rem;
+  --ds-font-size-2xl: 2rem;
+  --ds-font-weight-regular: 400;
+  --ds-font-weight-medium: 520;
+  --ds-font-weight-semibold: 650;
+  --ds-font-weight-bold: 740;
+  --ds-line-height-tight: 1.2;
+  --ds-line-height-normal: 1.5;
+  --ds-line-height-relaxed: 1.65;
+
+  --ds-control-height-sm: 2rem;
+  --ds-control-height-md: 2.5rem;
+  --ds-control-height-lg: 2.875rem;
+
+  --ds-shadow-sm: 0 1px 2px rgba(21, 32, 51, 0.06);
+  --ds-shadow-md: 0 8px 24px rgba(21, 32, 51, 0.09);
+  --ds-shadow-lg: 0 20px 50px rgba(21, 32, 51, 0.13);
+  --ds-shadow-primary: 0 8px 20px rgba(37, 99, 235, 0.22);
+  --ds-focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.34);
+
+  --ds-motion-fast: 120ms;
+  --ds-motion-normal: 180ms;
+  --ds-motion-slow: 260ms;
+  --ds-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --ds-z-dropdown: 30;
+  --ds-z-overlay: 50;
+  --ds-z-modal: 60;
+  --ds-z-toast: 70;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --ds-color-primary: var(--ds-color-blue-400);
+  --ds-color-primary-hover: var(--ds-color-blue-300);
+  --ds-color-primary-pressed: var(--ds-color-blue-200);
+  --ds-color-primary-soft: rgba(59, 130, 246, 0.16);
+  --ds-color-primary-soft-hover: rgba(59, 130, 246, 0.24);
+  --ds-color-canvas: var(--ds-color-slate-950);
+  --ds-color-surface: var(--ds-color-slate-900);
+  --ds-color-surface-subtle: var(--ds-color-slate-800);
+  --ds-color-surface-hover: var(--ds-color-slate-700);
+  --ds-color-border: var(--ds-color-slate-700);
+  --ds-color-border-strong: var(--ds-color-slate-600);
+  --ds-color-text: var(--ds-color-slate-25);
+  --ds-color-text-secondary: var(--ds-color-slate-300);
+  --ds-color-text-tertiary: var(--ds-color-slate-400);
+  --ds-color-text-inverse: var(--ds-color-slate-950);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ds-motion-fast: 0.01ms;
+    --ds-motion-normal: 0.01ms;
+    --ds-motion-slow: 0.01ms;
+  }
+}

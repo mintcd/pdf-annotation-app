@@ -2,10 +2,11 @@
 
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
 import { useMemo } from 'react'
-import { Button } from '../design-system/button'
-import { IconButton } from '../design-system/icon-button'
+import { Button } from './design-system/button'
+import { IconButton } from './design-system/icon-button'
 import { createRemotePdfSource } from '../lib/pdfSource'
 import PDFViewer from './PDFViewer'
+import { usePdfSyncEngine } from './SyncEngineProvider'
 
 type PdfDocumentPageProps = {
   url: string
@@ -13,6 +14,7 @@ type PdfDocumentPageProps = {
 }
 
 export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumentPageProps) {
+  const sync = usePdfSyncEngine()
   const result = useMemo(() => {
     try {
       return { source: createRemotePdfSource(url), error: '' }
@@ -33,6 +35,33 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
           <p>{result.error}</p>
           <Button variant="primary" onClick={() => window.location.assign('/')}>
             Return to dashboard
+          </Button>
+        </div>
+      </main>
+    )
+  }
+
+  if (!sync.sessionReady) {
+    return (
+      <main className="document-error-page">
+        <div className="document-error-card" aria-busy="true">
+          <span className="document-error-icon" aria-hidden="true"><FileText /></span>
+          <h1>Opening your session</h1>
+          <p>Loading...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (!sync.session.authenticated) {
+    return (
+      <main className="document-error-page">
+        <div className="document-error-card" role="alert">
+          <span className="document-error-icon" aria-hidden="true"><FileText /></span>
+          <h1>Sign in to annotate PDFs</h1>
+          <p>Your PDF annotations sync to your account.</p>
+          <Button variant="primary" onClick={() => window.location.assign('/')}>
+            Go to login
           </Button>
         </div>
       </main>

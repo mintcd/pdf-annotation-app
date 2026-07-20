@@ -15,14 +15,14 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Badge, type BadgeTone } from '../design-system/badge'
-import { Button } from '../design-system/button'
+import { Badge, type BadgeTone } from './design-system/badge'
+import { Button } from './design-system/button'
 import {
   Toolbar,
   ToolbarGroup,
   ToolbarSeparator,
   ToolbarSpacer,
-} from '../design-system/toolbar'
+} from './design-system/toolbar'
 
 export type PersistenceStatus = 'loading' | 'synced' | 'syncing' | 'queued' | 'error'
 

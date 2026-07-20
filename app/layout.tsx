@@ -1,14 +1,15 @@
 // @ts-ignore - global stylesheet is handled by the bundler
-import '../design-system/styles/tokens.css'
+import '../components/design-system/styles/tokens.css'
 import '../styles/global.css'
-import ServiceWorkerRegister from '../components/ServiceWorkerRegister'
+import SyncEngineProvider from '../components/SyncEngineProvider'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <ServiceWorkerRegister />
-        {children}
+        <SyncEngineProvider>
+          {children}
+        </SyncEngineProvider>
       </body>
     </html>
   )

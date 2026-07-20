@@ -14,7 +14,8 @@
     {
       "binding": "DB",
       "database_name": "pdf_annotation",
-      "database_id": "468b43f1-60be-4a41-9928-58b3f880b695"
+      "database_id": "468b43f1-60be-4a41-9928-58b3f880b695",
+      "remote": true
     }
   ],
   "observability": {

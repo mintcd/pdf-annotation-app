@@ -1,0 +1,29 @@
+.root {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.truncated {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smallCaps {
+  display: inline-block;
+  font-variant: small-caps;
+  font-feature-settings: "smcp" 1;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: baseline;
+  letter-spacing: 0.02em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.smallCaps::first-letter {
+  display: inline-block;
+  margin-right: 0.02em;
+  transform: scale(1.08);
+  transform-origin: left center;
+}

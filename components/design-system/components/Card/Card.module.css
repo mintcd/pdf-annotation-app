@@ -1,0 +1,34 @@
+.card {
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-xl);
+  color: var(--ds-color-text);
+  font-family: var(--ds-font-family-sans);
+  transition:
+    border-color var(--ds-motion-normal) var(--ds-ease-standard),
+    box-shadow var(--ds-motion-normal) var(--ds-ease-standard),
+    background-color var(--ds-motion-normal) var(--ds-ease-standard);
+}
+
+.default {
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+.subtle {
+  background: var(--ds-color-surface-subtle);
+}
+
+.elevated {
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-md);
+}
+
+.selected {
+  border-color: var(--ds-color-blue-300);
+  box-shadow: var(--ds-focus-ring);
+}
+
+.none { padding: 0; }
+.small { padding: var(--ds-space-3); }
+.medium { padding: var(--ds-space-5); }
+.large { padding: var(--ds-space-8); }
