@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
 import { createRemotePdfSource } from '../lib/pdfSource'
@@ -16,6 +16,7 @@ type PdfDocumentPageProps = {
 
 export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumentPageProps) {
   const sync = usePdfSyncEngine()
+  const [chromeVisible, setChromeVisible] = useState(true)
   const result = useMemo(() => {
     try {
       return { source: createRemotePdfSource(url), error: '' }
@@ -34,6 +35,10 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
     return documents.find((document) => document.source_key === source.documentKey) ?? null
   }, [source, sync.tables.documents])
   const documentTitle = source ? documentRow?.title ?? source.name : 'PDF Annotation Studio'
+
+  useEffect(() => {
+    setChromeVisible(true)
+  }, [source?.documentKey])
 
   useEffect(() => {
     if (!source || !sync.session.authenticated) return
@@ -89,7 +94,7 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
   }
 
   return (
-    <main className="pdf-document-page">
+    <main className={`pdf-document-page${chromeVisible ? '' : ' is-chrome-hidden'}`}>
       <header className="document-header">
         <IconButton
           label="Back to dashboard"
@@ -117,7 +122,11 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
         </Button>
       </header>
 
-      <PDFViewer source={source} initialAnnotationId={initialAnnotationId} />
+      <PDFViewer
+        source={source}
+        initialAnnotationId={initialAnnotationId}
+        onChromeToggle={() => setChromeVisible((visible) => !visible)}
+      />
     </main>
   )
 }

@@ -25,7 +25,7 @@ import { Scroller, ScrollPluginPackage, useScroll } from '@embedpdf/plugin-scrol
 import { SelectionLayer, SelectionPluginPackage } from '@embedpdf/plugin-selection/react'
 import { Viewport, ViewportPluginPackage } from '@embedpdf/plugin-viewport/react'
 import { useZoom, ZoomGestureWrapper, ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { PdfSource } from '../lib/pdfSource'
 import { sourceForEmbedPdf } from '../lib/pdfSource'
 import {
@@ -52,6 +52,7 @@ import ViewerToolbar, { type PersistenceStatus } from './ViewerToolbar'
 type PDFViewerProps = {
   source: PdfSource
   initialAnnotationId?: string
+  onChromeToggle?: () => void
 }
 
 type ActiveTouchGesture = {
@@ -71,7 +72,7 @@ const TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX = 34
 const TOUCH_LONG_PRESS_MS = 540
 const TOUCH_MOUSE_SUPPRESSION_MS = 700
 
-export default function PDFViewer({ source, initialAnnotationId }: PDFViewerProps) {
+export default function PDFViewer({ source, initialAnnotationId, onChromeToggle }: PDFViewerProps) {
   const documentOptions = useMemo(() => sourceForEmbedPdf(source), [source])
   const plugins = useMemo(
     () => [
@@ -129,6 +130,7 @@ export default function PDFViewer({ source, initialAnnotationId }: PDFViewerProp
                   <SyncedPdfWorkspace
                     documentId={activeDocumentId}
                     initialAnnotationId={initialAnnotationId}
+                    onChromeToggle={onChromeToggle}
                     source={source}
                   />
                 )
@@ -144,10 +146,12 @@ export default function PDFViewer({ source, initialAnnotationId }: PDFViewerProp
 function SyncedPdfWorkspace({
   documentId,
   initialAnnotationId,
+  onChromeToggle,
   source,
 }: {
   documentId: string
   initialAnnotationId?: string
+  onChromeToggle?: () => void
   source: PdfSource
 }) {
   const { provides: annotationScope, state: annotationState } = useAnnotation(documentId)
@@ -170,6 +174,7 @@ function SyncedPdfWorkspace({
   const syncFlushRef = useRef(sync.sync)
   const zoomRef = useRef(zoom)
   const touchZoomBaselineRef = useRef<number | null>(null)
+  const chromeToggleTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     syncFlushRef.current = sync.sync
@@ -178,6 +183,38 @@ function SyncedPdfWorkspace({
   useEffect(() => {
     zoomRef.current = zoom
   }, [zoom])
+
+  const cancelPendingChromeToggle = useCallback(() => {
+    if (chromeToggleTimerRef.current === null) return
+    window.clearTimeout(chromeToggleTimerRef.current)
+    chromeToggleTimerRef.current = null
+  }, [])
+
+  const scheduleChromeToggle = useCallback(() => {
+    if (!onChromeToggle) return
+
+    cancelPendingChromeToggle()
+    chromeToggleTimerRef.current = window.setTimeout(() => {
+      chromeToggleTimerRef.current = null
+      onChromeToggle()
+    }, TOUCH_DOUBLE_PRESS_MAX_MS + 40)
+  }, [cancelPendingChromeToggle, onChromeToggle])
+
+  const handleViewportClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!onChromeToggle || event.defaultPrevented) return
+
+    if (event.detail > 1) {
+      cancelPendingChromeToggle()
+      return
+    }
+
+    if (isInteractiveTouchTarget(event.target)) return
+    scheduleChromeToggle()
+  }, [cancelPendingChromeToggle, onChromeToggle, scheduleChromeToggle])
+
+  useEffect(() => {
+    return cancelPendingChromeToggle
+  }, [cancelPendingChromeToggle])
 
   useEffect(() => {
     if (
@@ -270,12 +307,13 @@ function SyncedPdfWorkspace({
           && now - lastTapAt <= TOUCH_DOUBLE_PRESS_MAX_MS
           && Math.hypot(clientX - lastTapX, clientY - lastTapY) <= TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX
 
-        if (isDoublePress) {
-          if (event.cancelable) event.preventDefault()
-          event.stopPropagation()
-          lastTapAt = 0
-          suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
-          requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
+          if (isDoublePress) {
+            if (event.cancelable) event.preventDefault()
+            event.stopPropagation()
+            cancelPendingChromeToggle()
+            lastTapAt = 0
+            suppressMouseUntil = now + TOUCH_MOUSE_SUPPRESSION_MS
+            requestTouchDoublePressZoom(clientX, clientY, frame, zoomRef, touchZoomBaselineRef)
         } else {
           lastTapAt = now
           lastTapX = clientX
@@ -361,7 +399,7 @@ function SyncedPdfWorkspace({
       frame.removeEventListener('dblclick', handleSyntheticMouseEvent, true)
       frame.removeEventListener('contextmenu', handleSyntheticMouseEvent, true)
     }
-  }, [])
+  }, [cancelPendingChromeToggle])
 
   const flushSync = useCallback((label: string) => {
     void syncFlushRef.current().catch((error) => {
@@ -648,7 +686,12 @@ function SyncedPdfWorkspace({
           </div>
         )}
 
-        <div className="pdf-viewport-frame" ref={pdfViewportFrameRef}>
+        <div
+          className="pdf-viewport-frame"
+          ref={pdfViewportFrameRef}
+          onClick={handleViewportClick}
+          onDoubleClick={cancelPendingChromeToggle}
+        >
           <Viewport
             documentId={documentId}
             className="pdf-viewport"
@@ -764,14 +807,6 @@ function createRowId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`}`
 }
 
-function isTouchPointer(event: PointerEvent): boolean {
-  return event.pointerType === 'touch'
-}
-
-function isPrimaryTouchPointer(event: PointerEvent): boolean {
-  return event.pointerType === 'touch' && event.isPrimary !== false
-}
-
 function isInteractiveTouchTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest([
     '.selection-menu',
@@ -782,12 +817,6 @@ function isInteractiveTouchTarget(target: EventTarget | null): boolean {
     '[contenteditable="true"]',
     '[data-touch-gesture-ignore]',
   ].join(',')))
-}
-
-function stopTouchSelectionEvent(event: Event) {
-  if (event.cancelable) event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
 }
 
 function dispatchSyntheticDoubleClick(
@@ -843,80 +872,4 @@ function requestTouchDoublePressZoom(
 
   touchZoomBaselineRef.current = currentZoom
   zoomScope.requestZoom(Math.min(Math.max(currentZoom * 1.75, currentZoom + 0.65, 1.5), 3), center)
-}
-
-function requestTouchPinchZoom(
-  points: readonly [TouchGesturePoint, TouchGesturePoint],
-  pinchGesture: ActivePinchGesture,
-  frame: HTMLElement,
-  zoomRef: ZoomScopeRef,
-) {
-  const zoomScope = zoomRef.current
-  if (!zoomScope) return
-
-  const distance = touchPointDistance(points[0], points[1])
-  if (pinchGesture.startDistance <= 0 || distance <= 0) return
-
-  const viewport = frame.querySelector<HTMLElement>('.pdf-viewport') ?? frame
-  const viewportRect = viewport.getBoundingClientRect()
-  const midpoint = touchPointMidpoint(points[0], points[1])
-  const nextZoom = pinchGesture.startZoom * (distance / pinchGesture.startDistance)
-
-  zoomScope.requestZoom(nextZoom, {
-    vx: midpoint.clientX - viewportRect.left,
-    vy: midpoint.clientY - viewportRect.top,
-  })
-}
-
-function touchPointDistance(first: TouchGesturePoint, second: TouchGesturePoint): number {
-  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY)
-}
-
-function touchPointMidpoint(first: TouchGesturePoint, second: TouchGesturePoint): TouchGesturePoint {
-  return {
-    clientX: (first.clientX + second.clientX) / 2,
-    clientY: (first.clientY + second.clientY) / 2,
-    target: first.target,
-  }
-}
-
-function touchListToPinchPoints(touches: TouchList): readonly [TouchGesturePoint, TouchGesturePoint] | null {
-  const first = touches[0]
-  const second = touches[1]
-  if (!first || !second) return null
-
-  return [
-    {
-      clientX: first.clientX,
-      clientY: first.clientY,
-      target: first.target,
-    },
-    {
-      clientX: second.clientX,
-      clientY: second.clientY,
-      target: second.target,
-    },
-  ]
-}
-
-function mouseEventCameFromTouch(event: MouseEvent): boolean {
-  const sourceCapabilities = (event as MouseEvent & {
-    sourceCapabilities?: { firesTouchEvents?: boolean } | null
-  }).sourceCapabilities
-
-  return sourceCapabilities?.firesTouchEvents === true
-}
-
-function wheelEventToZoomDelta(event: WheelEvent, currentZoom: number): number {
-  const deltaModeMultiplier = event.deltaMode === 1
-    ? 16
-    : event.deltaMode === 2
-      ? window.innerHeight
-      : 1
-  const normalizedDeltaY = event.deltaY * deltaModeMultiplier
-  if (!Number.isFinite(normalizedDeltaY) || normalizedDeltaY === 0) return 0
-
-  const exponent = Math.max(-0.5, Math.min(0.5, -normalizedDeltaY * 0.0015))
-  const targetZoom = currentZoom * Math.exp(exponent)
-  return targetZoom - currentZoom
 }

@@ -364,8 +364,10 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-overflow-scrolling: touch;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -3028,6 +3030,15 @@ body,
   gap: var(--ds-space-3);
   overflow: hidden;
   padding: var(--ds-space-3);
+}
+
+.pdf-document-page.is-chrome-hidden {
+  gap: 0;
+}
+
+.pdf-document-page.is-chrome-hidden .document-header,
+.pdf-document-page.is-chrome-hidden .viewer-toolbar {
+  display: none;
 }
 
 .document-header {
