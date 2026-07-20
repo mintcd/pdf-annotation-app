@@ -83,6 +83,6 @@ export function sourceForEmbedPdf(source: PdfSource) {
     url: `/api/pdf?url=${encodeURIComponent(source.originalUrl)}`,
     name: source.name,
     documentId: source.documentKey,
-    mode: 'full-fetch' as const,
+    mode: 'auto' as const,
   };
 }

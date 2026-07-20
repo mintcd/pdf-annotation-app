@@ -21,7 +21,13 @@ import {
   PagePointerProvider,
 } from '@embedpdf/plugin-interaction-manager/react'
 import { RenderLayer, RenderPluginPackage } from '@embedpdf/plugin-render/react'
-import { Scroller, ScrollPluginPackage, useScroll } from '@embedpdf/plugin-scroll/react'
+import {
+  Scroller,
+  ScrollPluginPackage,
+  useScroll,
+  useScrollCapability,
+  type ScrollMetrics,
+} from '@embedpdf/plugin-scroll/react'
 import { SelectionLayer, SelectionPluginPackage } from '@embedpdf/plugin-selection/react'
 import { Viewport, ViewportPluginPackage } from '@embedpdf/plugin-viewport/react'
 import { useZoom, ZoomGestureWrapper, ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react'
@@ -42,7 +48,7 @@ import {
   type PdfDocumentRow,
   type PdfSelectionGeometry,
 } from '../utils/pdfSync'
-import { FALLBACK_HIGHLIGHT_COLOR } from '../utils/highlightColors'
+import { FALLBACK_HIGHLIGHT_COLOR, type HighlightColor } from '../utils/highlightColors'
 import { useHighlightColors } from '../hooks/useHighlightColors'
 import AnnotationSidebar from './AnnotationSidebar'
 import DocumentOutlineSidebar from './DocumentOutlineSidebar'
@@ -72,11 +78,26 @@ type ActiveTouchGesture = {
 
 type ZoomScopeRef = { current: ReturnType<typeof useZoom>['provides'] }
 
+type PdfRenderWindow = {
+  currentPageIndex: number
+  initialized: boolean
+  visiblePageIndexes: ReadonlySet<number>
+}
+
+type CreateHighlight = (input: {
+  color: string
+  geometry: PdfSelectionGeometry[]
+  text: string
+}) => Promise<void>
+
 const TOUCH_PAN_THRESHOLD_PX = 7
 const TOUCH_DOUBLE_PRESS_MAX_MS = 320
 const TOUCH_DOUBLE_PRESS_MAX_DISTANCE_PX = 34
 const TOUCH_LONG_PRESS_MS = 540
 const TOUCH_MOUSE_SUPPRESSION_MS = 700
+const PDF_SCROLL_BUFFER_PAGES = 2
+const PDF_BITMAP_LOOKAHEAD_PAGES = 1
+const PDF_INTERACTION_LOOKAHEAD_PAGES = 1
 
 export default function PDFViewer({
   chromeVisible = true,
@@ -91,7 +112,9 @@ export default function PDFViewer({
         initialDocuments: [documentOptions],
       }),
       createPluginRegistration(ViewportPluginPackage),
-      createPluginRegistration(ScrollPluginPackage),
+      createPluginRegistration(ScrollPluginPackage, {
+        defaultBufferSize: PDF_SCROLL_BUFFER_PAGES,
+      }),
       createPluginRegistration(RenderPluginPackage),
       createPluginRegistration(InteractionManagerPluginPackage),
       createPluginRegistration(SelectionPluginPackage, {
@@ -171,6 +194,7 @@ function SyncedPdfWorkspace({
   const { provides: annotationScope, state: annotationState } = useAnnotation(documentId)
   const { provides: scroll } = useScroll(documentId)
   const { provides: zoom } = useZoom(documentId)
+  const renderWindow = usePdfRenderWindow(documentId)
   const sync = usePdfSyncEngine()
   const documentsTable = useMemo(() => sync.db.table('documents'), [sync.db])
   const annotationsTable = useMemo(() => sync.db.table('annotations'), [sync.db])
@@ -773,41 +797,15 @@ function SyncedPdfWorkspace({
               <Scroller
                 documentId={documentId}
                 renderPage={({ pageIndex }) => (
-                  <PagePointerProvider
-                    className="pdf-page-touch-target"
+                  <IncrementalPdfPage
+                    color={highlightColor}
                     documentId={documentId}
+                    highlightColors={highlightColors.data}
+                    onColorChange={setHighlightColor}
+                    onCreateHighlight={createHighlight}
                     pageIndex={pageIndex}
-                  >
-                    <RenderLayer
-                      aria-hidden="true"
-                      className="pdf-render-layer"
-                      documentId={documentId}
-                      draggable={false}
-                      onDragStart={(event) => event.preventDefault()}
-                      pageIndex={pageIndex}
-                      style={{ pointerEvents: 'none' }}
-                    />
-                    <SelectionLayer
-                      documentId={documentId}
-                      pageIndex={pageIndex}
-                      selectionMenu={({ menuWrapperProps }) => (
-                        <div
-                          {...menuWrapperProps}
-                          className="selection-menu-anchor"
-                          style={menuWrapperProps.style}
-                        >
-                          <SelectionPanel
-                            color={highlightColor}
-                            documentId={documentId}
-                            highlightColors={highlightColors.data}
-                            onColorChange={setHighlightColor}
-                            onCreateHighlight={createHighlight}
-                          />
-                        </div>
-                      )}
-                    />
-                    <AnnotationLayer documentId={documentId} pageIndex={pageIndex} />
-                  </PagePointerProvider>
+                    renderWindow={renderWindow}
+                  />
                 )}
               />
             </ZoomGestureWrapper>
@@ -842,6 +840,168 @@ function SyncedPdfWorkspace({
       )}
     </div>
   )
+}
+
+function IncrementalPdfPage({
+  color,
+  documentId,
+  highlightColors,
+  onColorChange,
+  onCreateHighlight,
+  pageIndex,
+  renderWindow,
+}: {
+  color: string
+  documentId: string
+  highlightColors: readonly HighlightColor[]
+  onColorChange: (color: string) => void
+  onCreateHighlight: CreateHighlight
+  pageIndex: number
+  renderWindow: PdfRenderWindow
+}) {
+  const distanceFromCurrentPage = Math.abs(pageIndex - renderWindow.currentPageIndex)
+  const isVisible = renderWindow.visiblePageIndexes.has(pageIndex)
+  const shouldRenderBitmap = !renderWindow.initialized
+    || isVisible
+    || distanceFromCurrentPage <= PDF_BITMAP_LOOKAHEAD_PAGES
+  const shouldRenderInteractionLayers = !renderWindow.initialized
+    || isVisible
+    || distanceFromCurrentPage <= PDF_INTERACTION_LOOKAHEAD_PAGES
+  const [bitmapRequested, setBitmapRequested] = useState(shouldRenderBitmap)
+
+  useEffect(() => {
+    if (shouldRenderBitmap) setBitmapRequested(true)
+  }, [shouldRenderBitmap])
+
+  return (
+    <PagePointerProvider
+      className={`pdf-page-touch-target${bitmapRequested ? '' : ' is-pending-render'}`}
+      documentId={documentId}
+      pageIndex={pageIndex}
+    >
+      <div className="pdf-render-slot">
+        <div className="pdf-render-placeholder" aria-hidden="true" />
+        {bitmapRequested && (
+          <RenderLayer
+            aria-hidden="true"
+            className="pdf-render-layer"
+            documentId={documentId}
+            draggable={false}
+            onDragStart={(event) => event.preventDefault()}
+            pageIndex={pageIndex}
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
+      </div>
+
+      {shouldRenderInteractionLayers && (
+        <>
+          <SelectionLayer
+            documentId={documentId}
+            pageIndex={pageIndex}
+            selectionMenu={({ menuWrapperProps }) => (
+              <div
+                {...menuWrapperProps}
+                className="selection-menu-anchor"
+                style={menuWrapperProps.style}
+              >
+                <SelectionPanel
+                  color={color}
+                  documentId={documentId}
+                  highlightColors={highlightColors}
+                  onColorChange={onColorChange}
+                  onCreateHighlight={onCreateHighlight}
+                />
+              </div>
+            )}
+          />
+          <AnnotationLayer documentId={documentId} pageIndex={pageIndex} />
+        </>
+      )}
+    </PagePointerProvider>
+  )
+}
+
+function usePdfRenderWindow(documentId: string): PdfRenderWindow {
+  const { provides: scrollCapability } = useScrollCapability()
+  const [renderWindow, setRenderWindow] = useState<PdfRenderWindow>(() => ({
+    currentPageIndex: 0,
+    initialized: false,
+    visiblePageIndexes: new Set([0]),
+  }))
+
+  useEffect(() => {
+    if (!scrollCapability) return
+
+    const scope = scrollCapability.forDocument(documentId)
+    const updateRenderWindow = (next: PdfRenderWindow) => {
+      setRenderWindow((current) => (
+        samePdfRenderWindow(current, next) ? current : next
+      ))
+    }
+
+    try {
+      updateRenderWindow(pdfRenderWindowFromMetrics(scope.getMetrics()))
+    } catch {
+      updateRenderWindow({
+        currentPageIndex: Math.max(scope.getCurrentPage() - 1, 0),
+        initialized: false,
+        visiblePageIndexes: new Set([Math.max(scope.getCurrentPage() - 1, 0)]),
+      })
+    }
+
+    const unsubscribeScroll = scope.onScroll((metrics) => {
+      updateRenderWindow(pdfRenderWindowFromMetrics(metrics))
+    })
+    const unsubscribePageChange = scope.onPageChange((event) => {
+      setRenderWindow((current) => {
+        const currentPageIndex = Math.max(event.pageNumber - 1, 0)
+        const next = {
+          ...current,
+          currentPageIndex,
+          visiblePageIndexes: current.initialized
+            ? current.visiblePageIndexes
+            : new Set([currentPageIndex]),
+        }
+        return samePdfRenderWindow(current, next) ? current : next
+      })
+    })
+
+    return () => {
+      unsubscribeScroll()
+      unsubscribePageChange()
+    }
+  }, [documentId, scrollCapability])
+
+  return renderWindow
+}
+
+function pdfRenderWindowFromMetrics(metrics: ScrollMetrics): PdfRenderWindow {
+  const currentPageIndex = Math.max(metrics.currentPage - 1, 0)
+  const visiblePages = metrics.visiblePages.length > 0 ? metrics.visiblePages : [metrics.currentPage]
+
+  return {
+    currentPageIndex,
+    initialized: true,
+    visiblePageIndexes: new Set(
+      visiblePages.map((pageNumber) => Math.max(pageNumber - 1, 0)),
+    ),
+  }
+}
+
+function samePdfRenderWindow(left: PdfRenderWindow, right: PdfRenderWindow): boolean {
+  if (
+    left.currentPageIndex !== right.currentPageIndex
+    || left.initialized !== right.initialized
+    || left.visiblePageIndexes.size !== right.visiblePageIndexes.size
+  ) {
+    return false
+  }
+
+  for (const pageIndex of left.visiblePageIndexes) {
+    if (!right.visiblePageIndexes.has(pageIndex)) return false
+  }
+  return true
 }
 
 function annotationNeedsSync(current: PdfAnnotationObject, next: PdfHighlightAnnoObject): boolean {
