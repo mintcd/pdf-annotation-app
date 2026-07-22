@@ -484,6 +484,58 @@ button:disabled {
   font-size: 12px;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Mobile selection drag handles                                      */
+/* ------------------------------------------------------------------ */
+
+.mobile-selection-handles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.selection-handle {
+  position: fixed;
+  width: 2px;
+  pointer-events: auto;
+  touch-action: none;
+  background: var(--accent, #2563eb);
+}
+
+/* Invisible expanded hit area for easier touch targeting */
+.selection-handle::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: -18px;
+  right: -18px;
+}
+
+/* Teardrop bulb */
+.selection-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent, #2563eb);
+  transform: translateX(-50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* Start handle: bulb sits above the line */
+.selection-handle-start::after {
+  top: -8px;
+}
+
+/* End handle: bulb sits below the line */
+.selection-handle-end::after {
+  bottom: -8px;
+}
+
 .color-swatches {
   display: inline-flex;
   align-items: center;

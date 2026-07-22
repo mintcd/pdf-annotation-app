@@ -58,6 +58,7 @@ import { FALLBACK_HIGHLIGHT_COLOR, type HighlightColor } from '../utils/highligh
 import { useHighlightColors } from '../hooks/useHighlightColors'
 import AnnotationSidebar from './AnnotationSidebar'
 import DocumentOutlineSidebar from './DocumentOutlineSidebar'
+import MobileSelectionHandles from './MobileSelectionHandles'
 import SelectionPanel from './SelectionPanel'
 import { usePdfSyncEngine } from './SyncEngineProvider'
 import ViewerToolbar, { type PersistenceStatus } from './ViewerToolbar'
@@ -890,6 +891,7 @@ function SyncedPdfWorkspace({
               />
             </ZoomGestureWrapper>
           </Viewport>
+          <MobileSelectionHandles documentId={documentId} />
         </div>
       </div>
 
@@ -1161,6 +1163,7 @@ function createRowId(prefix: string): string {
 
 function isInteractiveTouchTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest([
+    '.selection-handle',
     '.selection-menu',
     'button',
     'input',
