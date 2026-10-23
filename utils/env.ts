@@ -1,23 +1,13 @@
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement
-  first<T = Record<string, unknown>>(): Promise<T | null>
-  all<T = Record<string, unknown>>(): Promise<{ results?: T[] }>
-  run(): Promise<unknown>
+import { env } from 'cloudflare:workers'
+
+// Optional deployment secrets/settings supplement the Wrangler-generated bindings.
+export type Env = Cloudflare.Env & {
+  GITHUB_DOCUMENTS_TOKEN?: string
+  GITHUB_DOCUMENTS_OWNER?: string
+  GITHUB_DOCUMENTS_REPO?: string
+  GITHUB_DOCUMENTS_BRANCH?: string
+  GITHUB_DOCUMENTS_CDN_URL?: string
+  GITHUB_DOCUMENTS_ALLOWED_USER_ID?: string
 }
 
-interface D1DatabaseBinding {
-  prepare(query: string): D1PreparedStatement
-  batch(statements: D1PreparedStatement[]): Promise<unknown>
-}
-
-export interface Env {
-  DB: D1DatabaseBinding
-  ASSETS: { fetch(request: Request): Promise<Response> }
-  [key: string]: unknown
-}
-
-export function getEnv(): Env {
-  const env = (globalThis as unknown as { __env?: Env }).__env
-  if (!env) throw new Error('Cloudflare env not available.')
-  return env
-}
+export function getEnv(): Env { return env }

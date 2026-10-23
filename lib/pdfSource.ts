@@ -69,20 +69,3 @@ export async function createLocalPdfSource(file: File): Promise<LocalPdfSource> 
     name: safePdfName(file.name),
   };
 }
-
-export function sourceForEmbedPdf(source: PdfSource) {
-  if (source.kind === 'local') {
-    return {
-      buffer: source.buffer,
-      name: source.name,
-      documentId: source.documentKey,
-    } as const;
-  }
-
-  return {
-    url: `/api/pdf?url=${encodeURIComponent(source.originalUrl)}`,
-    name: source.name,
-    documentId: source.documentKey,
-    mode: 'auto' as const,
-  };
-}

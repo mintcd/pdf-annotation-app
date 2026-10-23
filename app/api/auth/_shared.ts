@@ -1,13 +1,11 @@
 import { getEnv } from '../../../utils/env'
 import {
   ANONYMOUS_USER_ID,
-  SYNC_USER_COOKIE,
   normalizeUserId,
   syncSessionForUserId,
   type SyncSession,
 } from '../../../utils/syncIdentity'
-
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+import { isSameOriginRequest, issueSessionCookie, revokeSession } from '../../../lib/serverSession'
 
 export class AuthRequestError extends Error {
   constructor(
@@ -30,6 +28,7 @@ export type UserRow = {
 }
 
 export async function readCredentials(request: Request): Promise<Credentials> {
+  assertSameOrigin(request)
   let body: unknown
   try {
     body = await request.json()
@@ -89,25 +88,27 @@ export async function findUserById(userId: string): Promise<UserRow | null> {
     .first<UserRow>()
 }
 
-export function sessionResponse(
+export async function sessionResponse(
+  request: Request,
   session: SyncSession,
   init: ResponseInit = {},
-): Response {
+): Promise<Response> {
   const headers = new Headers(init.headers)
   headers.set('cache-control', 'no-store')
-  headers.set('set-cookie', sessionCookie(session))
+  headers.set('set-cookie', await issueSessionCookie(request, getEnv().DB, session.userId))
   return Response.json(session, {
     ...init,
     headers,
   })
 }
 
-export function signedOutResponse(init: ResponseInit = {}): Response {
+export async function signedOutResponse(request: Request, init: ResponseInit = {}): Promise<Response> {
+  assertSameOrigin(request)
   const headers = new Headers(init.headers)
   headers.set('cache-control', 'no-store')
   headers.set(
     'set-cookie',
-    `${SYNC_USER_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    await revokeSession(request, getEnv().DB),
   )
   return Response.json(syncSessionForUserId(undefined), {
     ...init,
@@ -136,14 +137,8 @@ export function errorResponse(error: unknown): Response {
   )
 }
 
-function sessionCookie(session: SyncSession): string {
-  return [
-    `${SYNC_USER_COOKIE}=${encodeURIComponent(session.userId)}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
-  ].join('; ')
+export function assertSameOrigin(request: Request): void {
+  if (!isSameOriginRequest(request)) throw new AuthRequestError('Cross-origin request denied', 403)
 }
 
 async function sha256Hex(value: string): Promise<string> {

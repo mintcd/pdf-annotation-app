@@ -1,7 +1,3 @@
-import { useExport } from '@embedpdf/plugin-export/react'
-import { useHistoryCapability } from '@embedpdf/plugin-history/react'
-import { useScroll } from '@embedpdf/plugin-scroll/react'
-import { useZoom, ZoomMode } from '@embedpdf/plugin-zoom/react'
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,7 +10,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge, type BadgeTone } from './design-system/badge'
 import { Button } from './design-system/button'
 import {
@@ -31,7 +27,19 @@ type ViewerToolbarProps = {
   annotationsOpen: boolean;
   canJumpBack: boolean;
   canJumpForward: boolean;
-  documentId: string;
+  currentPage: number;
+  totalPages: number;
+  zoom: number;
+  onPageChange: (page: number) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFitWidth: () => void;
+  onDownload: () => Promise<void>;
+  downloading: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   onChromeToggle?: () => void;
   onAnnotationsToggle: () => void;
   onJumpBack: () => void;
@@ -46,7 +54,19 @@ export default function ViewerToolbar({
   annotationsOpen,
   canJumpBack,
   canJumpForward,
-  documentId,
+  currentPage,
+  totalPages,
+  zoom,
+  onPageChange,
+  onZoomIn,
+  onZoomOut,
+  onFitWidth,
+  onDownload,
+  downloading,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onChromeToggle,
   onAnnotationsToggle,
   onJumpBack,
@@ -55,41 +75,23 @@ export default function ViewerToolbar({
   outlineOpen,
   persistenceStatus,
 }: ViewerToolbarProps) {
-  const { provides: scroll, state: scrollState } = useScroll(documentId)
-  const { provides: zoom, state: zoomState } = useZoom(documentId)
-  const { provides: exporter } = useExport(documentId)
-  const { provides: historyCapability } = useHistoryCapability()
-  const history = useMemo(
-    () => historyCapability?.forDocument(documentId) ?? null,
-    [documentId, historyCapability],
-  )
-  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false })
   const [pageDraft, setPageDraft] = useState('1')
 
   useEffect(() => {
-    setPageDraft(String(Math.max(1, scrollState.currentPage || 1)))
-  }, [scrollState.currentPage])
-
-  useEffect(() => {
-    if (!history) return
-    const update = () => {
-      setHistoryState({ canUndo: history.canUndo(), canRedo: history.canRedo() })
-    }
-    update()
-    return history.onHistoryChange(update)
-  }, [history])
+    setPageDraft(String(Math.max(1, currentPage || 1)))
+  }, [currentPage])
 
   const goToDraftPage = () => {
-    if (!scroll) return
+    if (totalPages < 1) return
     const pageNumber = Math.min(
       Math.max(Number.parseInt(pageDraft, 10) || 1, 1),
-      Math.max(scrollState.totalPages, 1),
+      Math.max(totalPages, 1),
     )
-    scroll.scrollToPage({ pageNumber, behavior: 'instant' })
+    onPageChange(pageNumber)
     setPageDraft(String(pageNumber))
   }
 
-  const zoomPercent = Math.round((zoomState.currentZoomLevel || 1) * 100)
+  const zoomPercent = Math.round((zoom || 1) * 100)
   const saveLabel = persistenceStatus === 'loading'
     ? 'Loading annotations...'
     : persistenceStatus === 'error'
@@ -145,7 +147,7 @@ export default function ViewerToolbar({
               if (event.key === 'Enter') goToDraftPage()
             }}
           />
-          <span>of {Math.max(scrollState.totalPages, 1)}</span>
+          <span>of {Math.max(totalPages, 1)}</span>
         </label>
       </ToolbarGroup>
 
@@ -164,11 +166,11 @@ export default function ViewerToolbar({
       <ToolbarSeparator className="toolbar-separator zoom-separator" />
 
       <ToolbarGroup className="toolbar-group zoom-controls">
-        <button className="icon-button" type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom?.zoomOut()} disabled={!zoom}>
+        <button className="icon-button" type="button" aria-label="Zoom out" title="Zoom out" onClick={onZoomOut} disabled={totalPages < 1}>
           <ZoomOut size={17} aria-hidden="true" />
         </button>
         <span className="zoom-value" aria-label={`Zoom ${zoomPercent}%`}>{zoomPercent}%</span>
-        <button className="icon-button" type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoom?.zoomIn()} disabled={!zoom}>
+        <button className="icon-button" type="button" aria-label="Zoom in" title="Zoom in" onClick={onZoomIn} disabled={totalPages < 1}>
           <ZoomIn size={17} aria-hidden="true" />
         </button>
         <button
@@ -176,8 +178,8 @@ export default function ViewerToolbar({
           type="button"
           aria-label="Fit page width"
           title="Fit page width"
-          onClick={() => zoom?.requestZoom(ZoomMode.FitWidth)}
-          disabled={!zoom}
+          onClick={onFitWidth}
+          disabled={totalPages < 1}
         >
           <Maximize2 size={16} aria-hidden="true" />
         </button>
@@ -186,10 +188,10 @@ export default function ViewerToolbar({
       <ToolbarSeparator className="toolbar-separator history-separator" />
 
       <ToolbarGroup className="toolbar-group history-controls">
-        <button className="icon-button" type="button" aria-label="Undo" title="Undo" disabled={!historyState.canUndo} onClick={() => history?.undo()}>
+        <button className="icon-button" type="button" aria-label="Undo" title="Undo" disabled={!canUndo} onClick={onUndo}>
           <Undo2 size={17} aria-hidden="true" />
         </button>
-        <button className="icon-button" type="button" aria-label="Redo" title="Redo" disabled={!historyState.canRedo} onClick={() => history?.redo()}>
+        <button className="icon-button" type="button" aria-label="Redo" title="Redo" disabled={!canRedo} onClick={onRedo}>
           <Redo2 size={17} aria-hidden="true" />
         </button>
       </ToolbarGroup>
@@ -204,8 +206,9 @@ export default function ViewerToolbar({
         variant="secondary"
         size="small"
         leadingIcon={<Download aria-hidden="true" />}
-        disabled={!exporter}
-        onClick={() => exporter?.download()}
+        disabled={totalPages < 1 || downloading}
+        loading={downloading}
+        onClick={() => void onDownload()}
       >
         Download
       </Button>

@@ -15,6 +15,7 @@
     },
     "lib": ["dom", "dom.iterable", "esnext"],
     "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types", "node"],
     "incremental": true,
     "resolveJsonModule": true,
     "plugins": [
@@ -33,5 +34,6 @@
     "**/*.ts",
     "**/*.tsx"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist", ".wrangler", ".codex-patches"]
+  // "typeRoots": ["./node_modules/@types", "@types"]
 }

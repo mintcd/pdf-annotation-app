@@ -1,4 +1,3 @@
-export const SYNC_USER_COOKIE = 'pdf_annotation_user_id'
 export const ANONYMOUS_USER_ID = 'anonymous'
 
 export interface SyncSession {
@@ -22,22 +21,6 @@ export function syncSessionForUserId(userId: string | undefined, username?: stri
   }
 }
 
-export function syncSessionFromRequest(request: Request): SyncSession {
-  return syncSessionFromHeaderValues(
-    request.headers.get('x-pdf-annotation-user-id'),
-    request.headers.get('cookie'),
-  )
-}
-
-export function syncSessionFromHeaderValues(
-  userIdHeader: string | null,
-  cookieHeader: string | null,
-): SyncSession {
-  return syncSessionForUserId(
-    userIdHeader ?? readCookie(cookieHeader, SYNC_USER_COOKIE),
-  )
-}
-
 export function normalizeUserId(value: string): string {
   const normalized = value
     .trim()
@@ -52,14 +35,4 @@ function normalizeSessionUsername(value: string | null | undefined): string | nu
   if (value === null || value === undefined) return null
   const username = normalizeUserId(value)
   return username === ANONYMOUS_USER_ID ? null : username
-}
-
-function readCookie(header: string | null, name: string): string | undefined {
-  if (header === null) return undefined
-
-  for (const part of header.split(';')) {
-    const [rawKey, ...rawValue] = part.trim().split('=')
-    if (rawKey === name) return decodeURIComponent(rawValue.join('='))
-  }
-  return undefined
 }

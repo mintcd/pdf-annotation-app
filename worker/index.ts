@@ -1,12 +1,7 @@
 import handler from 'vinext/server/app-router-entry'
-import type { Env } from '../utils/env'
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url)
-    globalThis.__origin = url.origin
-    globalThis.__env = env
-
-    return handler.fetch(request)
+  async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext): Promise<Response> {
+    return handler.fetch(request, env, ctx)
   },
-}
+} satisfies ExportedHandler<Cloudflare.Env>

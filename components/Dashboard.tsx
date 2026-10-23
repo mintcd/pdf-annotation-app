@@ -1109,6 +1109,7 @@ function AuthenticatedDashboard() {
     setSignOutError(null)
 
     try {
+      await sync.logoutSync()
       const response = await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'same-origin',

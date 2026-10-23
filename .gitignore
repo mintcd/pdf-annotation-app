@@ -6,6 +6,11 @@ node_modules
 .wrangler
 tsconfig.tsbuildinfo
 .agents
+/public/pdfjs/
+/.codex-patches/
+/test-results/
+/sync-test-results/
+/playwright-report/
 
 dev-server.err.log
 dev-server.out.log

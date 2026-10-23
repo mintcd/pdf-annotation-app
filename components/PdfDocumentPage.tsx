@@ -37,6 +37,8 @@ export default function PdfDocumentPage({ url, initialAnnotationId }: PdfDocumen
   }, [source, sync.tables.documents])
   const documentTitle = source ? documentRow?.title ?? source.name : 'PDF Annotation Studio'
 
+
+
   useEffect(() => {
     setChromeVisible(true)
   }, [source?.documentKey])

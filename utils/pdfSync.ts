@@ -1,20 +1,14 @@
-import { PdfAnnotationSubtype, PdfBlendMode, type PdfHighlightAnnoObject, type Rect } from '@embedpdf/models'
-import type { SyncTableClient } from '@mintcd/sync-engine/client'
+import type { AppSyncTable } from '../lib/syncTables'
+import type { PdfRect, PdfSelectionGeometry } from '../lib/pdfGeometry'
 import { type PdfSource } from '../lib/pdfSource'
-import type { replicaSchema, Row } from './engine'
-
-export const PDF_ANNOTATION_SOURCE = 'mintcd-pdf-annotator'
+import type { Row } from './engine'
 
 export type PdfDocumentRow = Row<'documents'>
 export type PdfAnnotationRow = Row<'annotations'>
-export type DocumentsTable = SyncTableClient<typeof replicaSchema, 'documents'>
-export type AnnotationsTable = SyncTableClient<typeof replicaSchema, 'annotations'>
+export type DocumentsTable = AppSyncTable<'documents'>
+export type AnnotationsTable = AppSyncTable<'annotations'>
 
-export type PdfSelectionGeometry = {
-  pageIndex: number
-  rect: Rect
-  segmentRects: Rect[]
-}
+
 
 export type EnsurePdfDocumentResult = {
   row: PdfDocumentRow
@@ -25,8 +19,8 @@ export type PdfAnnotationPosition = {
   version: 1
   kind: 'pdf-highlight'
   pageIndex: number
-  rect: Rect
-  segmentRects: Rect[]
+  rect: PdfRect
+  segmentRects: PdfRect[]
 }
 
 export function syncTimestamp(): string {
@@ -93,16 +87,6 @@ export function positionFromGeometry(geometry: PdfSelectionGeometry): PdfAnnotat
   }
 }
 
-export function positionFromAnnotation(annotation: PdfHighlightAnnoObject): PdfAnnotationPosition {
-  return {
-    version: 1,
-    kind: 'pdf-highlight',
-    pageIndex: annotation.pageIndex,
-    rect: annotation.rect,
-    segmentRects: annotation.segmentRects,
-  }
-}
-
 export function serializePdfPosition(position: PdfAnnotationPosition): string {
   return JSON.stringify(position)
 }
@@ -123,6 +107,7 @@ export function normalizePdfPosition(value: PdfAnnotationRow['position']): PdfAn
     record.version !== 1
     || record.kind !== 'pdf-highlight'
     || !Number.isInteger(record.pageIndex)
+    || record.pageIndex < 0
     || !isRect(record.rect)
     || !Array.isArray(record.segmentRects)
     || !record.segmentRects.every(isRect)
@@ -134,53 +119,20 @@ export function normalizePdfPosition(value: PdfAnnotationRow['position']): PdfAn
     version: 1,
     kind: 'pdf-highlight',
     pageIndex: record.pageIndex as number,
-    rect: record.rect as Rect,
-    segmentRects: record.segmentRects as Rect[],
+    rect: record.rect as PdfRect,
+    segmentRects: record.segmentRects as PdfRect[],
   }
 }
 
-export function highlightAnnotationFromRow(
-  row: PdfAnnotationRow,
-  documentKey: string,
-): PdfHighlightAnnoObject | null {
-  const position = normalizePdfPosition(row.position)
-  if (!position) return null
-
-  return {
-    type: PdfAnnotationSubtype.HIGHLIGHT,
-    id: row.id,
-    pageIndex: position.pageIndex,
-    rect: position.rect,
-    segmentRects: position.segmentRects,
-    strokeColor: row.color,
-    color: row.color,
-    opacity: 1,
-    blendMode: PdfBlendMode.Multiply,
-    flags: ['print'],
-    contents: row.comment ?? undefined,
-    created: new Date(row.created_at),
-    modified: new Date(row.updated_at),
-    custom: {
-      source: PDF_ANNOTATION_SOURCE,
-      documentKey,
-      text: row.text,
-    },
-  }
-}
-
-export function isPdfAnnotatorHighlight(annotation: { custom?: unknown }, documentKey: string): boolean {
-  if (!annotation.custom || typeof annotation.custom !== 'object') return false
-  const custom = annotation.custom as Record<string, unknown>
-  return custom.source === PDF_ANNOTATION_SOURCE && custom.documentKey === documentKey
-}
-
-function isRect(value: unknown): value is Rect {
+function isRect(value: unknown): value is PdfRect {
   if (!value || typeof value !== 'object') return false
-  const rect = value as Rect
+  const rect = value as PdfRect
   return isNumber(rect.origin?.x)
     && isNumber(rect.origin?.y)
     && isNumber(rect.size?.width)
     && isNumber(rect.size?.height)
+    && rect.size.width >= 0
+    && rect.size.height >= 0
 }
 
 function isNumber(value: unknown): value is number {

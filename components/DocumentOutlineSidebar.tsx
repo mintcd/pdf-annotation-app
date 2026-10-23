@@ -1,14 +1,6 @@
 'use client'
 
-import { useRegistry } from '@embedpdf/core/react'
-import {
-  PdfActionType,
-  PdfZoomMode,
-  type PdfBookmarkObject,
-  type PdfLinkTarget,
-} from '@embedpdf/models'
-import { useBookmarkCapability } from '@embedpdf/plugin-bookmark/react'
-import { useScroll } from '@embedpdf/plugin-scroll/react'
+import type { PdfOutlineNode } from '../lib/pdfGeometry'
 import {
   BookOpen,
   CornerDownRight,
@@ -26,12 +18,15 @@ import { IconButton } from './design-system/icon-button'
 import { Panel, PanelBody, PanelFooter, PanelHeader } from './design-system/panel'
 
 type DocumentOutlineSidebarProps = {
-  documentId: string
+  outline: PdfOutlineNode[]
+  loading: boolean
+  error?: string
+  currentPage: number
+  totalPages: number
+  onOutlineChange: (next: PdfOutlineNode[]) => void
   onClose: () => void
-  onPageJump?: (pageNumber: number) => void
+  onPageJump: (pageNumber: number) => void
 }
-
-type OutlineStatus = 'loading' | 'ready' | 'error'
 
 type BookmarkTarget =
   | { type: 'page'; pageIndex: number }
@@ -46,89 +41,47 @@ type OutlineDraft = {
 }
 
 export default function DocumentOutlineSidebar({
-  documentId,
+  outline: bookmarks,
+  loading,
+  error,
+  currentPage,
+  totalPages,
+  onOutlineChange,
   onClose,
   onPageJump,
 }: DocumentOutlineSidebarProps) {
-  const { provides: bookmarkCapability } = useBookmarkCapability()
-  const { registry, documents } = useRegistry()
-  const { provides: scroll, state: scrollState } = useScroll(documentId)
-  const [bookmarks, setBookmarks] = useState<PdfBookmarkObject[]>([])
-  const [status, setStatus] = useState<OutlineStatus>('loading')
-  const [error, setError] = useState('')
   const [selectedPath, setSelectedPath] = useState<number[] | null>(null)
   const [draft, setDraft] = useState<OutlineDraft | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [saveStatus, setSaveStatus] = useState('')
+  const status = loading ? 'loading' : error ? 'error' : 'ready'
 
   useEffect(() => {
-    if (!bookmarkCapability) {
-      setStatus('loading')
-      return
+    if (loading) {
+      setSelectedPath(null)
+      setDraft(null)
     }
-
-    let active = true
-    setStatus('loading')
-    setError('')
-
-    void bookmarkCapability.forDocument(documentId).getBookmarks().toPromise().then(
-      (result) => {
-        if (!active) return
-        setBookmarks(result.bookmarks)
-        setSelectedPath(null)
-        setDraft(null)
-        setStatus('ready')
-      },
-      (reason) => {
-        if (!active) return
-        setBookmarks([])
-        setError(reason instanceof Error ? reason.message : 'The table of contents could not be loaded.')
-        setStatus('error')
-      },
-    )
-
-    return () => {
-      active = false
-    }
-  }, [bookmarkCapability, documentId])
+  }, [loading])
 
   const itemCount = useMemo(() => countBookmarks(bookmarks), [bookmarks])
   const selectedBookmark = selectedPath ? getBookmarkAtPath(bookmarks, selectedPath) : null
-  const pageCount = Math.max(
-    documents[documentId]?.document?.pageCount ?? scrollState.totalPages ?? 1,
-    1,
-  )
+  const pageCount = Math.max(totalPages, 1)
 
   const startDraft = (mode: OutlineDraft['mode']) => {
     if ((mode === 'child' || mode === 'edit') && !selectedPath) return
 
     const bookmark = mode === 'edit' ? selectedBookmark : null
     const pageTarget = bookmark ? getBookmarkTarget(bookmark) : null
-    const currentPage = Math.min(Math.max(scrollState.currentPage || 1, 1), pageCount)
+    const draftPage = Math.min(Math.max(currentPage || 1, 1), pageCount)
 
-    setSaveStatus('')
     setDraft({
       mode,
       targetPath: selectedPath ? [...selectedPath] : null,
       title: bookmark?.title || 'New outline',
-      pageDraft: String(pageTarget?.type === 'page' ? pageTarget.pageIndex + 1 : currentPage),
+      pageDraft: String(pageTarget?.type === 'page' ? pageTarget.pageIndex + 1 : draftPage),
       error: '',
     })
   }
 
-  const persistBookmarks = async (nextBookmarks: PdfBookmarkObject[]) => {
-    const document = documents[documentId]?.document
-    if (!registry || !document) {
-      throw new Error('The PDF document is not ready yet.')
-    }
-
-    const writableBookmarks = normalizeBookmarksForWrite(nextBookmarks)
-    const engine = registry.getEngine()
-    await engine.setBookmarks(document, writableBookmarks).toPromise()
-    return writableBookmarks
-  }
-
-  const saveDraft = async () => {
+  const saveDraft = () => {
     if (!draft) return
 
     const title = draft.title.trim()
@@ -149,23 +102,12 @@ export default function DocumentOutlineSidebar({
       return
     }
 
-    setSaving(true)
-    setError('')
-    setSaveStatus('')
-    try {
-      const persistedBookmarks = await persistBookmarks(nextBookmarks)
-      setBookmarks(persistedBookmarks)
-      setSelectedPath(resolveNextSelectedPath(draft, bookmarks))
-      setDraft(null)
-      setSaveStatus('Saved')
-    } catch (reason) {
-      setDraft({ ...draft, error: getErrorMessage(reason, 'The outline could not be saved.') })
-    } finally {
-      setSaving(false)
-    }
+    onOutlineChange(nextBookmarks)
+    setSelectedPath(resolveNextSelectedPath(draft, bookmarks))
+    setDraft(null)
   }
 
-  const deleteSelected = async () => {
+  const deleteSelected = () => {
     if (!selectedPath || !selectedBookmark) return
 
     const hasChildren = (selectedBookmark.children?.length ?? 0) > 0
@@ -177,20 +119,9 @@ export default function DocumentOutlineSidebar({
     if (!confirmed) return
 
     const nextBookmarks = removeBookmarkAtPath(bookmarks, selectedPath)
-    setSaving(true)
-    setError('')
-    setSaveStatus('')
-    try {
-      const persistedBookmarks = await persistBookmarks(nextBookmarks)
-      setBookmarks(persistedBookmarks)
-      setSelectedPath(null)
-      setDraft(null)
-      setSaveStatus('Deleted')
-    } catch (reason) {
-      setError(getErrorMessage(reason, 'The outline could not be deleted.'))
-    } finally {
-      setSaving(false)
-    }
+    onOutlineChange(nextBookmarks)
+    setSelectedPath(null)
+    setDraft(null)
   }
 
   const activateTarget = (target: BookmarkTarget) => {
@@ -198,15 +129,8 @@ export default function DocumentOutlineSidebar({
       return
     }
 
-    if (!scroll) return
-
     const pageNumber = target.pageIndex + 1
-    onPageJump?.(pageNumber)
-    scroll.scrollToPage({
-      pageNumber,
-      behavior: 'instant',
-      alignY: 0,
-    })
+    onPageJump(pageNumber)
   }
 
   return (
@@ -232,7 +156,7 @@ export default function DocumentOutlineSidebar({
             variant="secondary"
             size="small"
             leadingIcon={<Plus aria-hidden="true" />}
-            disabled={status !== 'ready' || saving}
+            disabled={status !== 'ready'}
             onClick={() => startDraft('sibling')}
           >
             Add outline
@@ -241,7 +165,7 @@ export default function DocumentOutlineSidebar({
             variant="secondary"
             size="small"
             leadingIcon={<CornerDownRight aria-hidden="true" />}
-            disabled={status !== 'ready' || saving || !selectedPath}
+            disabled={status !== 'ready' || !selectedBookmark}
             onClick={() => startDraft('child')}
           >
             Add sub-outline
@@ -249,7 +173,7 @@ export default function DocumentOutlineSidebar({
           <IconButton
             label="Edit outline"
             size="small"
-            disabled={status !== 'ready' || saving || !selectedPath}
+            disabled={status !== 'ready' || !selectedBookmark}
             onClick={() => startDraft('edit')}
           >
             <Pencil aria-hidden="true" />
@@ -258,7 +182,7 @@ export default function DocumentOutlineSidebar({
             label="Delete outline"
             size="small"
             tone="danger"
-            disabled={status !== 'ready' || saving || !selectedPath}
+            disabled={status !== 'ready' || !selectedBookmark}
             onClick={() => void deleteSelected()}
           >
             <Trash2 aria-hidden="true" />
@@ -297,7 +221,6 @@ export default function DocumentOutlineSidebar({
               <Button
                 type="submit"
                 size="small"
-                loading={saving}
                 leadingIcon={<Save aria-hidden="true" />}
               >
                 Save
@@ -305,7 +228,6 @@ export default function DocumentOutlineSidebar({
               <Button
                 variant="ghost"
                 size="small"
-                disabled={saving}
                 onClick={() => setDraft(null)}
               >
                 Cancel
@@ -346,7 +268,7 @@ export default function DocumentOutlineSidebar({
       </PanelBody>
 
       <PanelFooter className="sidebar-footer">
-        {saveStatus || 'Edits update the PDF outline/bookmark tree.'}
+        Outline edits are included when you download this PDF.
       </PanelFooter>
     </Panel>
   )
@@ -360,7 +282,7 @@ function OutlineList({
   parentPath = [],
   selectedPath,
 }: {
-  bookmarks: PdfBookmarkObject[]
+  bookmarks: PdfOutlineNode[]
   level: number
   onActivate: (target: BookmarkTarget) => void
   onSelect: (path: number[]) => void
@@ -411,112 +333,25 @@ function OutlineList({
   )
 }
 
-function getBookmarkTarget(bookmark: PdfBookmarkObject): BookmarkTarget | null {
-  const target = bookmark.target
-  if (!target) return null
-
-  if (target.type === 'destination') {
-    return normalizePageTarget(target.destination.pageIndex)
-  }
-
-  if (target.action.type === PdfActionType.Goto) {
-    return normalizePageTarget(target.action.destination.pageIndex)
-  }
-
-  if (target.action.type === PdfActionType.URI) {
-    return { type: 'uri', uri: target.action.uri }
-  }
-
+function getBookmarkTarget(bookmark: PdfOutlineNode): BookmarkTarget | null {
+  if (bookmark.pageIndex !== undefined) return normalizePageTarget(bookmark.pageIndex)
+  if (bookmark.uri) return { type: 'uri', uri: bookmark.uri }
   return null
 }
 
-function createPageBookmark(title: string, pageIndex: number): PdfBookmarkObject {
+function createPageBookmark(title: string, pageIndex: number): PdfOutlineNode {
   return {
     title,
-    target: createPageTarget(pageIndex),
+    pageIndex,
     children: [],
   }
 }
 
-function createPageTarget(pageIndex: number): PdfLinkTarget {
-  return {
-    type: 'destination',
-    destination: {
-      pageIndex,
-      zoom: { mode: PdfZoomMode.FitPage },
-      view: [],
-    },
-  }
-}
-
-function normalizeBookmarksForWrite(bookmarks: PdfBookmarkObject[]): PdfBookmarkObject[] {
-  return bookmarks.map((bookmark) => {
-    const target = normalizeWritableTarget(bookmark.target)
-    return {
-      title: bookmark.title,
-      ...(target ? { target } : {}),
-      ...(bookmark.children?.length
-        ? { children: normalizeBookmarksForWrite(bookmark.children) }
-        : {}),
-    }
-  })
-}
-
-function normalizeWritableTarget(target: PdfBookmarkObject['target']): PdfLinkTarget | null {
-  if (!target) return null
-
-  if (target.type === 'destination') {
-    return {
-      type: 'destination',
-      destination: normalizeWritableDestination(target.destination),
-    }
-  }
-
-  if (target.action.type === PdfActionType.Goto) {
-    return {
-      type: 'action',
-      action: {
-        ...target.action,
-        destination: normalizeWritableDestination(target.action.destination),
-      },
-    }
-  }
-
-  if (
-    target.action.type === PdfActionType.URI
-    || target.action.type === PdfActionType.LaunchAppOrOpenFile
-  ) {
-    return target
-  }
-
-  return null
-}
-
-function normalizeWritableDestination(
-  destination: Extract<PdfLinkTarget, { type: 'destination' }>['destination'],
-): Extract<PdfLinkTarget, { type: 'destination' }>['destination'] {
-  const writableModes = new Set([
-    PdfZoomMode.XYZ,
-    PdfZoomMode.FitPage,
-    PdfZoomMode.FitHorizontal,
-    PdfZoomMode.FitVertical,
-    PdfZoomMode.FitRectangle,
-  ])
-
-  if (writableModes.has(destination.zoom.mode)) return destination
-
-  return {
-    ...destination,
-    zoom: { mode: PdfZoomMode.FitPage },
-    view: [],
-  }
-}
-
 function updateBookmarkTree(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   draft: OutlineDraft,
-  bookmark: PdfBookmarkObject,
-): PdfBookmarkObject[] | null {
+  bookmark: PdfOutlineNode,
+): PdfOutlineNode[] | null {
   if (draft.mode === 'sibling') {
     if (!draft.targetPath) return [...cloneBookmarks(bookmarks), bookmark]
     return insertBookmarkSibling(bookmarks, draft.targetPath, bookmark)
@@ -531,15 +366,16 @@ function updateBookmarkTree(
   return replaceBookmarkAtPath(bookmarks, draft.targetPath, (current) => ({
     ...current,
     title: bookmark.title,
-    target: bookmark.target,
+    pageIndex: bookmark.pageIndex,
+    uri: undefined,
   }))
 }
 
 function insertBookmarkSibling(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   path: number[],
-  bookmark: PdfBookmarkObject,
-): PdfBookmarkObject[] {
+  bookmark: PdfOutlineNode,
+): PdfOutlineNode[] {
   if (path.length === 1) {
     const next = cloneBookmarks(bookmarks)
     next.splice(path[0] + 1, 0, bookmark)
@@ -555,10 +391,10 @@ function insertBookmarkSibling(
 }
 
 function insertBookmarkChild(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   path: number[],
-  bookmark: PdfBookmarkObject,
-): PdfBookmarkObject[] {
+  bookmark: PdfOutlineNode,
+): PdfOutlineNode[] {
   return replaceBookmarkAtPath(bookmarks, path, (parent) => ({
     ...parent,
     children: [...cloneBookmarks(parent.children ?? []), bookmark],
@@ -566,10 +402,10 @@ function insertBookmarkChild(
 }
 
 function replaceBookmarkAtPath(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   path: number[],
-  update: (bookmark: PdfBookmarkObject) => PdfBookmarkObject,
-): PdfBookmarkObject[] {
+  update: (bookmark: PdfOutlineNode) => PdfOutlineNode,
+): PdfOutlineNode[] {
   return bookmarks.map((bookmark, index) => {
     if (index !== path[0]) return cloneBookmark(bookmark)
     if (path.length === 1) return update(cloneBookmark(bookmark))
@@ -582,9 +418,9 @@ function replaceBookmarkAtPath(
 }
 
 function removeBookmarkAtPath(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   path: number[],
-): PdfBookmarkObject[] {
+): PdfOutlineNode[] {
   if (path.length === 1) {
     return cloneBookmarks(bookmarks).filter((_, index) => index !== path[0])
   }
@@ -596,11 +432,11 @@ function removeBookmarkAtPath(
 }
 
 function getBookmarkAtPath(
-  bookmarks: PdfBookmarkObject[],
+  bookmarks: PdfOutlineNode[],
   path: number[],
-): PdfBookmarkObject | null {
+): PdfOutlineNode | null {
   let currentList = bookmarks
-  let current: PdfBookmarkObject | undefined
+  let current: PdfOutlineNode | undefined
 
   for (const index of path) {
     current = currentList[index]
@@ -613,7 +449,7 @@ function getBookmarkAtPath(
 
 function resolveNextSelectedPath(
   draft: OutlineDraft,
-  previousBookmarks: PdfBookmarkObject[],
+  previousBookmarks: PdfOutlineNode[],
 ): number[] | null {
   if (draft.mode === 'edit') return draft.targetPath ? [...draft.targetPath] : null
   if (!draft.targetPath) return [previousBookmarks.length]
@@ -628,14 +464,14 @@ function resolveNextSelectedPath(
   ]
 }
 
-function cloneBookmarks(bookmarks: PdfBookmarkObject[]): PdfBookmarkObject[] {
+function cloneBookmarks(bookmarks: PdfOutlineNode[]): PdfOutlineNode[] {
   return bookmarks.map(cloneBookmark)
 }
 
-function cloneBookmark(bookmark: PdfBookmarkObject): PdfBookmarkObject {
+function cloneBookmark(bookmark: PdfOutlineNode): PdfOutlineNode {
   return {
     ...bookmark,
-    children: bookmark.children ? cloneBookmarks(bookmark.children) : undefined,
+    children: cloneBookmarks(bookmark.children),
   }
 }
 
@@ -653,15 +489,7 @@ function pathsEqual(left: number[], right: number[] | null): boolean {
   return !!right && left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-function getErrorMessage(reason: unknown, fallback: string): string {
-  if (reason instanceof Error) return reason.message
-  if (typeof reason === 'object' && reason && 'message' in reason) {
-    return String((reason as { message?: unknown }).message ?? fallback)
-  }
-  return fallback
-}
-
-function countBookmarks(bookmarks: PdfBookmarkObject[]): number {
+function countBookmarks(bookmarks: PdfOutlineNode[]): number {
   return bookmarks.reduce((count, bookmark) => {
     return count + 1 + countBookmarks(bookmark.children ?? [])
   }, 0)

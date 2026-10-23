@@ -1,6 +1,5 @@
-import { useScroll } from '@embedpdf/plugin-scroll/react'
 import { MessageSquare, Trash2, X } from 'lucide-react'
-import { type CSSProperties, useMemo, useState } from 'react'
+import { type CSSProperties, useMemo, useRef, useState } from 'react'
 import { Badge } from './design-system/badge'
 import { Button } from './design-system/button'
 import { IconButton } from './design-system/icon-button'
@@ -15,7 +14,6 @@ import { normalizePdfPosition } from '../utils/pdfSync'
 
 type AnnotationSidebarProps = {
   annotations: PdfAnnotationRow[]
-  documentId: string
   highlightColors: readonly HighlightColor[]
   onClose: () => void
   onColorChange: (annotation: PdfAnnotationRow, color: string) => Promise<void>
@@ -27,7 +25,6 @@ type AnnotationSidebarProps = {
 
 export default function AnnotationSidebar({
   annotations,
-  documentId,
   highlightColors,
   onClose,
   onColorChange,
@@ -36,8 +33,6 @@ export default function AnnotationSidebar({
   onSelect,
   selectedId,
 }: AnnotationSidebarProps) {
-  const { provides: scroll } = useScroll(documentId)
-  const [draftComments, setDraftComments] = useState<Record<string, string>>({})
   const colorOptions = highlightColors.length > 0 ? highlightColors : INITIAL_HIGHLIGHT_COLORS
 
   const sortedAnnotations = useMemo(() => {
@@ -51,7 +46,6 @@ export default function AnnotationSidebar({
 
   const selectAnnotation = (annotation: PdfAnnotationRow) => {
     onSelect(annotation)
-    scroll?.scrollToPage({ pageNumber: annotation.page_index + 1, behavior: 'instant' })
   }
 
   return (
@@ -76,7 +70,6 @@ export default function AnnotationSidebar({
           <div className="annotation-list">
             {sortedAnnotations.map((annotation) => {
               const selected = selectedId === annotation.id
-              const commentValue = draftComments[annotation.id] ?? annotation.comment ?? ''
 
               return (
                 <article
@@ -120,17 +113,7 @@ export default function AnnotationSidebar({
                         })}
                       </div>
 
-                      <AnnotationNoteEditor
-                        value={commentValue}
-                        label={`Note for page ${annotation.page_index + 1}`}
-                        onBlur={(nextComment) => void onCommentChange(annotation, nextComment)}
-                        onChange={(nextComment) => {
-                          setDraftComments((current) => ({
-                            ...current,
-                            [annotation.id]: nextComment,
-                          }))
-                        }}
-                      />
+                      <AnnotationCommentEditor annotation={annotation} onCommentChange={onCommentChange} />
 
                       <Button
                         variant="danger"
@@ -154,4 +137,50 @@ export default function AnnotationSidebar({
       </PanelFooter>
     </Panel>
   )
+}
+
+function AnnotationCommentEditor({
+  annotation,
+  onCommentChange,
+}: {
+  annotation: PdfAnnotationRow
+  onCommentChange: AnnotationSidebarProps['onCommentChange']
+}) {
+  type Draft = { value: string; original: string }
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [editorRevision, setEditorRevision] = useState(0)
+  const dirtyRef = useRef<Draft | null>(null)
+  const annotationRef = useRef(annotation)
+  annotationRef.current = annotation
+
+  const save = (editorValue: string) => {
+    const pending = dirtyRef.current
+    const latest = annotationRef.current
+    const currentComment = latest.comment ?? ''
+    if (!pending) {
+      // The shared editor preserves focused DOM. Refresh it after an external
+      // update rather than treating its old DOM text as a new user edit.
+      if (editorValue !== currentComment) setEditorRevision((value) => value + 1)
+      return
+    }
+    // Outside clicks and native blur can both fire; consume each dirty draft once.
+    dirtyRef.current = null
+    setDraft(null)
+    setEditorRevision((value) => value + 1)
+    if (pending.original !== currentComment) return
+    void onCommentChange(latest, pending.value)
+  }
+
+  return <AnnotationNoteEditor
+    key={editorRevision}
+    value={draft?.value ?? annotation.comment ?? ''}
+    label={`Note for page ${annotation.page_index + 1}`}
+    onBlur={save}
+    onChange={(value) => {
+      const original = dirtyRef.current?.original ?? annotationRef.current.comment ?? ''
+      const next = value === original ? null : { value, original }
+      dirtyRef.current = next
+      setDraft(next)
+    }}
+  />
 }

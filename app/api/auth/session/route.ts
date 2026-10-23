@@ -1,26 +1,17 @@
-import {
-  syncSessionForUserId,
-  syncSessionFromRequest,
-} from '../../../../utils/syncIdentity'
-import { findUserById } from '../_shared'
+import { readTrustedSession } from '../../../../lib/serverSession'
+import { getEnv } from '../../../../utils/env'
+import { errorResponse } from '../_shared'
 
 export const runtime = 'edge'
 
 export async function GET(request: Request): Promise<Response> {
-  const session = syncSessionFromRequest(request)
-  let username: string | null = null
-
-  if (session.authenticated) {
-    try {
-      username = (await findUserById(session.userId))?.username ?? null
-    } catch (error) {
-      console.warn('Failed to look up username for auth session', error)
-    }
-  }
-
-  return Response.json(syncSessionForUserId(session.userId, username), {
-    headers: {
-      'cache-control': 'no-store',
-    },
-  })
+  try {
+    const env = getEnv()
+    const session = await readTrustedSession(request, env.DB)
+    const deploymentVersion = __SYNC_PRODUCTION__
+      ? env.CF_VERSION_METADATA?.id || __SYNC_DEPLOYMENT_VERSION__ : __SYNC_DEPLOYMENT_VERSION__
+    return Response.json({ ...session, deploymentVersion }, {
+      headers: { 'cache-control': 'no-store' },
+    })
+  } catch (error) { return errorResponse(error) }
 }

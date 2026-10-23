@@ -367,74 +367,68 @@ button:disabled {
   color: #1d4ed8;
 }
 
-.pdf-viewport {
-  flex: 1;
-  min-height: 0;
-  overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-overflow-scrolling: touch;
-  -webkit-tap-highlight-color: transparent;
-}
-
 .pdf-viewport-frame {
+  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
-}
-
-.pdf-render-layer,
-.pdf-viewport img,
-.pdf-viewport canvas,
-.pdf-viewport svg {
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-user-drag: none;
-}
-
-.pdf-render-slot {
-  position: absolute;
-  inset: 0;
   overflow: hidden;
-  background: #fff;
-  pointer-events: none;
 }
 
-.pdf-render-placeholder {
+.pdfjs-viewport {
   position: absolute;
   inset: 0;
-  background:
-    linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.08), transparent),
-    #fff;
-}
-
-.pdf-render-layer {
-  position: absolute;
-  inset: 0;
-  display: block;
-  pointer-events: none;
-}
-
-.pdf-page-touch-target {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
   -webkit-tap-highlight-color: transparent;
+  background: #eef2f7;
 }
 
-@media (pointer: coarse) {
-  .pdf-viewport,
-  .pdf-page-touch-target {
-    touch-action: pan-x pan-y pinch-zoom !important;
-  }
+.pdfjs-viewport .pdfViewer {
+  min-height: 100%;
+  padding: 12px 0;
+  --page-bg-color: #fff;
 }
 
-.selection-menu-anchor {
-  overflow: visible;
+.pdfjs-viewport .page {
+  box-sizing: content-box;
+}
+
+.pdfjs-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.app-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  mix-blend-mode: multiply;
+}
+
+.app-highlight {
+  position: absolute;
+  opacity: 0.35;
+}
+
+.app-highlight.is-selected {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
 }
 
 .selection-menu {
   position: absolute;
-  top: calc(100% + 8px);
+  bottom: 12px;
   left: 50%;
+  z-index: 30;
   width: max-content;
   max-width: calc(100vw - 32px);
   display: inline-flex;
@@ -482,58 +476,6 @@ button:disabled {
   max-width: 220px;
   color: #b91c1c;
   font-size: 12px;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Mobile selection drag handles                                      */
-/* ------------------------------------------------------------------ */
-
-.mobile-selection-handles {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 50;
-}
-
-.selection-handle {
-  position: fixed;
-  width: 2px;
-  pointer-events: auto;
-  touch-action: none;
-  background: var(--accent, #2563eb);
-}
-
-/* Invisible expanded hit area for easier touch targeting */
-.selection-handle::before {
-  content: '';
-  position: absolute;
-  top: -8px;
-  bottom: -8px;
-  left: -18px;
-  right: -18px;
-}
-
-/* Teardrop bulb */
-.selection-handle::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent, #2563eb);
-  transform: translateX(-50%);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-}
-
-/* Start handle: bulb sits above the line */
-.selection-handle-start::after {
-  top: -8px;
-}
-
-/* End handle: bulb sits below the line */
-.selection-handle-end::after {
-  bottom: -8px;
 }
 
 .color-swatches {
@@ -3556,7 +3498,8 @@ body,
   }
 
   .viewer-toolbar .toolbar-download {
-    display: none;
+    display: inline-flex;
+    min-height: 44px;
   }
 
   .annotation-sidebar {
@@ -3593,13 +3536,6 @@ body,
   .color-swatch {
     width: 30px;
     height: 30px;
-  }
-}
-
-@media (max-width: 480px) and (pointer: coarse) {
-  .viewer-toolbar .zoom-separator,
-  .viewer-toolbar .zoom-controls {
-    display: none;
   }
 }
 

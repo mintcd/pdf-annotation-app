@@ -13,7 +13,7 @@ import {
   type GithubDocumentsConfig,
 } from '../../../../lib/githubDocuments'
 import { getEnv, type Env } from '../../../../utils/env'
-import { syncSessionFromRequest } from '../../../../utils/syncIdentity'
+import { readTrustedSession } from '../../../../lib/serverSession'
 
 export const runtime = 'edge'
 
@@ -90,7 +90,7 @@ type GithubBlobResult = {
 export async function GET(request: Request): Promise<Response> {
   try {
     const env = getEnv()
-    assertAuthorized(request, env)
+    await assertAuthorized(request, env)
 
     const config = githubDocumentsConfig(env)
     const requestUrl = new URL(request.url)
@@ -124,7 +124,7 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   try {
     const env = getEnv()
-    assertAuthorized(request, env)
+    await assertAuthorized(request, env)
 
     const config = githubDocumentsConfig(env)
     const token = githubDocumentsToken(env)
@@ -677,8 +677,8 @@ function githubDocumentsToken(env: Env): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function assertAuthorized(request: Request, env: Env): void {
-  const session = syncSessionFromRequest(request)
+async function assertAuthorized(request: Request, env: Env): Promise<void> {
+  const session = await readTrustedSession(request, env.DB)
   if (!session.authenticated) {
     throw new GithubDocumentsError('Sign in to use GitHub storage.', 401)
   }
@@ -689,7 +689,7 @@ function assertAuthorized(request: Request, env: Env): void {
   }
 }
 
-function envString(env: Env, key: string, fallback: string): string {
+function envString(env: Env, key: keyof Env, fallback: string): string {
   const value = env[key]
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
 }

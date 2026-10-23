@@ -1,0 +1,5 @@
+html, body { width: 100%; height: 100%; overflow: hidden; background: #e6e8ed; }
+.pdf-viewport-frame { position: absolute; inset: 0; }
+.pdfjs-viewport { position: absolute; inset: 0; overflow: auto; touch-action: pan-x pan-y; }
+.app-highlight-layer { position: absolute; inset: 0; pointer-events: none; }
+.app-highlight { position: absolute; opacity: .35; mix-blend-mode: multiply; }

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "generator": "@mintcd/sync-engine/vinext",
+  "files": [
+    {
+      "path": "app/api/sync/route.ts",
+      "sha256": "eab28d13be3dea68cc3b72735cfb2fce3a8e2ed83b7830e5a5c2b29cbdaed32b"
+    },
+    {
+      "path": "sync/generated.ts",
+      "sha256": "bd7b8179952ebf119c45421541aa7c007ad302c8d7bd842f6a26157e584a9d02"
+    }
+  ]
+}
